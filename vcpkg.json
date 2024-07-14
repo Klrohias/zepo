@@ -1,0 +1,9 @@
+{
+  "name" : "zepo",
+  "version-string" : "1.0.0",
+  "builtin-baseline" : "62aa44929954469878eb8fc562af706a8f5615a5",
+  "dependencies" : [ {
+    "name" : "yyjson",
+    "version>=" : "0.8.0"
+  } ]
+}
