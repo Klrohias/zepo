@@ -27,25 +27,53 @@ namespace zepo {
         }
     }
 
+    using ValueSetter = std::function<void(void* self, void* value)>;
+    using ValueGetter = std::function<void*(void* self)>;
+    using AttributeGetter = std::function<void*()>;
+
+    struct FieldInfo;
+    struct AttributeInfo;
+
+    struct AttributeInfo {
+        std::type_index type{typeid(void)};
+        AttributeGetter getter;
+    };
+
+    struct FieldInfo {
+        std::string name;
+        std::type_index type{typeid(void)};
+        ValueSetter setter;
+        ValueGetter getter;
+        std::vector<AttributeInfo> attributes;
+
+        [[nodiscard]] void* findAttribute(std::type_index type) const {
+            const auto iter = std::ranges::find_if(attributes, [&type](const AttributeInfo& it) {
+                return it.type == type;
+            });
+
+            if (iter == attributes.end()) {
+                return nullptr;
+            }
+
+            return iter->getter();
+        }
+
+        template<typename AttributeType>
+        AttributeType& findAttribute() const {
+            return *static_cast<AttributeType*>(findAttribute(typeid(AttributeType)));
+        }
+    };
+
     template<typename Type>
-    struct ReflectMetadata {
-        using ValueSetter = std::function<void(void* self, void* value)>;
-        using ValueGetter = std::function<void*(void* self)>;
+    struct TypeMetadata {
         using TargetType = Type;
 
-        struct Field {
-            std::string name;
-            std::type_index type{typeid(void)};
-            ValueSetter setter;
-            ValueGetter getter;
-        };
-
     private:
-        std::vector<Field> fields_{};
+        std::vector<FieldInfo> fields_{};
 
     public:
         template<typename FieldReference>
-        void addField(std::string name, FieldReference reference) {
+        FieldInfo& addField(std::string name, FieldReference reference) {
             using FieldType = decltype(TargetType{}.*reference);
 
             auto setter = [reference](void* self, void* value) {
@@ -57,12 +85,13 @@ namespace zepo {
                 return static_cast<void*>(&(*static_cast<TargetType*>(self).*reference));
             };
 
-            fields_.push_back(Field{name, typeid(FieldType), setter, getter});
+            auto field = FieldInfo{name, typeid(FieldType), setter, getter};
+            return fields_.emplace_back(field);
         }
 
-        const Field& findField(std::string_view name) {
+        const FieldInfo& findField(std::string_view name) {
             auto fieldIter = std::find_if(fields_.begin(), fields_.end(),
-                                          [&name](const Field& it) { return it.name == name; });
+                                          [&name](const FieldInfo& it) { return it.name == name; });
 
             if (fieldIter == fields_.end()) {
                 throw std::runtime_error("Failed to find field \"" + std::string(name) + "\"");
@@ -90,11 +119,22 @@ namespace zepo {
 
     template<typename Type>
     struct MetadataHandler {
-        ReflectMetadata<Type> metadata{};
+        TypeMetadata<Type> metadata{};
+        std::vector<AttributeInfo> pendingAttributes{};
 
         template<auto Name, auto FieldReference>
         void field() {
-            metadata.addField(Name(), FieldReference);
+            auto& fieldInfo = metadata.addField(Name(), FieldReference);
+            fieldInfo.attributes = std::move(pendingAttributes);
+            pendingAttributes = {};
+        }
+
+        template<auto Attribute>
+        void attribute() {
+            pendingAttributes.push_back(AttributeInfo{
+                typeid(decltype(*Attribute())),
+                Attribute
+            });
         }
     };
 
@@ -108,14 +148,14 @@ namespace zepo {
     };
 
     template<typename Type>
-    auto MetadataOf = ReflectMetadata<Type>{};
+    auto metadataOf = TypeMetadata<Type>{};
 }
 
 
 #ifndef ZEPO_NO_MACROS
 
-#define ZEPO_REFLECT_ACCESSABLE_(TYPE_) template<> \
-zepo::ReflectMetadata<TYPE_> zepo::MetadataOf<TYPE_> = []() { \
+#define ZEPO_REFLECT_METADATA_(TYPE_) template<> \
+zepo::TypeMetadata<TYPE_> zepo::metadataOf<TYPE_> = []() { \
     static zepo::ReflectTraits<TYPE_, zepo::MetadataHandler<TYPE_>> metadataHandler{}; \
     metadataHandler.handle(); \
     return metadataHandler.metadata; \
@@ -127,11 +167,16 @@ zepo::ReflectMetadata<TYPE_> zepo::MetadataOf<TYPE_> = []() { \
         using Handler::Handler; \
         void handle() {
 
+#define ZEPO_REFLECT_ATTRIBUTE_(ATTRIBUTE_) this->template attribute<[] { \
+    static auto currentAttribute{ATTRIBUTE_}; \
+    return &currentAttribute; \
+}>()
+
 #define ZEPO_REFLECT_FIELD_(FIELD_) this->template field<[] { return (#FIELD_); }, &CurrentType::##FIELD_>()
 
 #define ZEPO_REFLECT_INFO_END_()     } \
 };
 
-#endif
+#endif //ZEPO_NO_MACROS
 
 #endif //ZEPO_REFLECT_HPP

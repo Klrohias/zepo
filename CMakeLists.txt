@@ -3,4 +3,5 @@ project(zepo)
 
 include_directories(src)
 
+add_subdirectory(thirdparty/semver)
 add_subdirectory(src/zepo)

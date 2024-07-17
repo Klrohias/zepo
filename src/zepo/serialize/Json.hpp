@@ -70,6 +70,10 @@ namespace zepo {
 
         explicit JsonDocument();
     };
+
+    struct JsonPropertyNameAttribute {
+        std::string name;
+    };
 }
 
 #endif //ZEPO_JSON_HPP

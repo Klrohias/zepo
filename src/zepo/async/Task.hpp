@@ -24,16 +24,12 @@ namespace zepo {
 
             BasePromise(BasePromise&&) = delete;
 
-            static auto initial_suspend() noexcept {
+            auto initial_suspend() noexcept {
                 return std::suspend_never{};
             }
 
-            static auto final_suspend() noexcept {
+            auto final_suspend() noexcept {
                 return std::suspend_always{};
-            }
-
-            static void unhandled_exception() {
-                std::terminate();
             }
         };
 
@@ -41,9 +37,17 @@ namespace zepo {
         struct UnsafeAwaiter {
             using ContinueAction = std::function<void(UnsafeAwaiter*)>;
 
+            enum Status {
+                Pending = 0,
+                Completed,
+                Exception,
+            };
+
         private:
             ReturnType* returnValue_{nullptr};
-            bool completed_{false};
+            std::exception_ptr exception_{};
+
+            Status completed_{Pending};
             ContinueAction continueAction_{};
 
             std::mutex mutex_{};
@@ -65,11 +69,9 @@ namespace zepo {
             void setResult(ReturnType* value) {
                 if (completed_) {
                     throw std::runtime_error("Cannot set result twice");
-                }
-
-                {
+                } {
                     std::unique_lock lock{mutex_};
-                    completed_ = true;
+                    completed_ = Completed;
                     returnValue_ = value;
                 }
 
@@ -80,11 +82,31 @@ namespace zepo {
                 condVar_.notify_all();
             }
 
-            ReturnType* getResult() const {
+            void setException(const std::exception_ptr& exceptionPtr) {
+                if (completed_) {
+                    throw std::runtime_error("Cannot set result twice");
+                } {
+                    std::unique_lock lock{mutex_};
+                    completed_ = Exception;
+                    exception_ = exceptionPtr;
+                }
+
+                if (continueAction_) {
+                    continueAction_(this);
+                }
+
+                condVar_.notify_all();
+            }
+
+            [[nodiscard]] ReturnType* getResult() const {
                 return returnValue_;
             }
 
-            [[nodiscard]] bool isCompleted() const noexcept {
+            [[nodiscard]] std::exception_ptr getException() const {
+                return exception_;
+            }
+
+            [[nodiscard]] Status getStatus() const noexcept {
                 return completed_;
             }
 
@@ -128,6 +150,12 @@ namespace zepo {
                     awaiter_->setResult(new ReturnType{std::move(value)});
                 }
             }
+
+            void unhandled_exception() {
+                if (awaiter_) {
+                    awaiter_->setException(std::current_exception());
+                }
+            }
         };
 
         template<>
@@ -141,6 +169,12 @@ namespace zepo {
             void return_void() const noexcept {
                 if (awaiter_) {
                     awaiter_->setResult(nullptr);
+                }
+            }
+
+            void unhandled_exception() const {
+                if (awaiter_) {
+                    awaiter_->setException(std::current_exception());
                 }
             }
         };
@@ -167,7 +201,7 @@ namespace zepo {
         Task(Task&&) = default;
 
         [[nodiscard]] bool await_ready() const {
-            return awaiter_->isCompleted();
+            return awaiter_->getStatus();
         }
 
         void await_suspend(std::coroutine_handle<> handle) {
@@ -176,11 +210,14 @@ namespace zepo {
             }
 
             awaited_ = true;
-
             awaiter_->continueWith([handle](AwaiterType*) { handle.resume(); });
         }
 
         ReturnType await_resume() const {
+            if (awaiter_->getStatus() == AwaiterType::Exception) {
+                std::rethrow_exception(awaiter_->getException());
+            }
+
             if constexpr (!std::is_void_v<ReturnType>) {
                 return *awaiter_->getResult();
             } else {

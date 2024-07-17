@@ -195,6 +195,10 @@ namespace zepo {
                 target.*FieldReference = zepo::parse<decltype(Type{}.*FieldReference)>(token);
             }
         }
+
+        template<auto Attribute>
+        void attribute() {
+        }
     };
 }
 
@@ -213,6 +217,6 @@ struct zepo::ParseTraits<TYPE_, TokenType> { \
     } \
 }
 
-#endif
+#endif //ZEPO_NO_MACROS
 
 #endif //ZEPO_SERIALIZER_HPP

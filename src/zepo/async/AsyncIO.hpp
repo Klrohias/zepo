@@ -17,6 +17,15 @@ namespace zepo::async_io {
             return stream.gcount();
         });
     }
+
+    template<typename StreamType>
+    Task<std::string> readString(StreamType& stream) {
+        co_return co_await TaskUtils::run<std::string>([&] {
+            std::stringstream sstream;
+            sstream << stream.rdbuf();
+            return sstream.str();
+        });
+    }
 }
 
 #endif //ZEPO_ASYNCIO_HPP
