@@ -13,7 +13,7 @@
 #include "async/Task.hpp"
 
 namespace zepo {
-    class PackageResolvingContext {
+    class PackageInstallingContext {
         std::map<std::string, std::set<std::string>, std::less<>> requirements_{};
 
         Task<> buildDependenciesTree(const std::string& name);

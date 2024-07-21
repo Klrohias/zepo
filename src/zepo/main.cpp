@@ -6,22 +6,19 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <curl/curl.h>
+#include <quickjs.h>
 
 #include "Manifest.hpp"
-#include "network/CurlAsyncIO.hpp"
 #include "Configuration.hpp"
-#include "NpmProtocol.hpp"
 #include "async/AsyncIO.hpp"
 #include "async/Task.hpp"
 #include "serialize/Serializer.hpp"
 #include "serialize/Json.hpp"
 #include "PackageInstallation.hpp"
 #include "async/Generator.hpp"
+#include "Global.hpp"
 
 using namespace zepo;
-
-Configuration globalConfiguration{};
 
 Task<Configuration> readConfiguration(const std::string_view rootPath) {
     std::filesystem::path configPath = rootPath;
@@ -46,34 +43,10 @@ Task<Package> readPackageManifest() {
     co_return parse<Package>(jsonDoc.getRootToken());
 }
 
-
-Task<> performPackageResolve(const std::string& name, const std::string& source) {
-    if (name.starts_with("http")) {
-        // Http tarball
-    } else if (name.starts_with("git")) {
-        // Git
-    } else if (name.starts_with("file")) {
-        // Local file
-    } else {
-        // Semver, fetch from npm registry
-        const auto url = globalConfiguration.registry + "/" + name;
-
-        const std::string response = co_await async_io::curlEasyRequestAsync([&](auto instance) {
-            curl_easy_setopt(instance, CURLOPT_URL, url.data());
-            curl_easy_setopt(instance, CURLOPT_NOSIGNAL, 1);
-        });
-
-        const auto responseDoc = JsonDocument{response};
-        auto info = parse<NpmPackageInfo>(responseDoc.getRootToken());
-    }
-
-    co_return;
-}
-
 Task<> performInstall() {
     const auto packageManifest = co_await readPackageManifest();
 
-    PackageResolvingContext context;
+    PackageInstallingContext context;
 
     for (const auto& [packageName, source]: packageManifest.dependencies) {
         context.addRequirement(packageName, source);
@@ -117,8 +90,33 @@ Task<int> asyncMain(int argc, char** argv) {
     co_return 0;
 }
 
-int main(int argc, char** argv) {
+void initGlobals(int argc, char** argv) {
+    using namespace std::filesystem;
+
+    if (argc == 0) {
+        std::exit(1);
+    }
+
+    // init js runtime
+    globalJsRuntime = JS_NewRuntime();
+    JS_SetMemoryLimit(globalJsRuntime, 80 * 1024);
+    JS_SetMaxStackSize(globalJsRuntime, 10 * 1024);
+
+    // load configuration
     globalConfiguration = readConfiguration(argv[0]).getValue();
+
+    // load application paths
+    path rootPath = argv[0];
+    rootPath = rootPath.parent_path();
+
+    applicationPaths.packagesPath = rootPath / "packages";
+    applicationPaths.downloadsPath = rootPath / "downloads";
+    applicationPaths.buildsPath = rootPath / "builds";
+}
+
+int main(int argc, char** argv) {
+    initGlobals(argc, argv);
+
     auto mainTask = asyncMain(argc, argv);
     return mainTask.getValue();
 }

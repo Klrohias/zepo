@@ -16,8 +16,8 @@ namespace zepo::semver {
 
     class Range {
     public:
-        enum TokenType {
-            VersionLiteral,
+        enum class TokenType {
+            Version,
             Lt,
             Gt,
             LtEq,
@@ -29,25 +29,51 @@ namespace zepo::semver {
             Caret,
         };
 
-        enum NodeType {
+        enum class NodeLevel {
             Comparsion,
             Union,
         };
 
+        enum class NodeType {
+            Version,
+            Hyphen,
+            And,
+            Or,
+            Compare
+        };
+
         struct Token {
-            TokenType type{VersionLiteral};
+            TokenType type{TokenType::Version};
             std::string_view value;
         };
 
         struct BaseNode {
             virtual ~BaseNode() = default;
 
-            virtual NodeType getNodeType() = 0;
+            virtual NodeLevel getNodeLevel() = 0;
+
+            virtual NodeType getNodeType() =0;
+
             virtual bool execute(const Version&) = 0;
         };
 
         struct VersionNode : BaseNode {
+            std::string pattern;
+
+        private:
+            bool parsed_{false};
+            std::optional<int> major_{};
+            std::optional<int> minor_{};
+            std::optional<int> patch_{};
+
+            void parse();
+
+        public:
+            NodeLevel getNodeLevel() override;
+
             NodeType getNodeType() override;
+
+
             bool execute(const Version& version) override;
         };
 
@@ -57,7 +83,10 @@ namespace zepo::semver {
 
             HyphenNode(Version&& from, Version&& to);
 
+            NodeLevel getNodeLevel() override;
+
             NodeType getNodeType() override;
+
             bool execute(const Version& version) override;
         };
 
@@ -65,7 +94,10 @@ namespace zepo::semver {
             std::unique_ptr<BaseNode> left;
             std::unique_ptr<BaseNode> right;
 
+            NodeLevel getNodeLevel() override;
+
             NodeType getNodeType() override;
+
             bool execute(const Version& version) override;
         };
 
@@ -73,7 +105,10 @@ namespace zepo::semver {
             std::unique_ptr<BaseNode> left;
             std::unique_ptr<BaseNode> right;
 
+            NodeLevel getNodeLevel() override;
+
             NodeType getNodeType() override;
+
             bool execute(const Version& version) override;
         };
 
@@ -83,7 +118,10 @@ namespace zepo::semver {
 
             CompareNode(TokenType compareType, Version&& target);
 
+            NodeLevel getNodeLevel() override;
+
             NodeType getNodeType() override;
+
             bool execute(const Version& version) override;
         };
 

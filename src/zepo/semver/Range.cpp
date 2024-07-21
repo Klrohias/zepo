@@ -4,11 +4,13 @@
 
 #include "Range.hpp"
 
+#include <charconv>
 #include <iostream>
 #include <locale>
 #include <string>
 
 namespace zepo::semver {
+    using NodeLevel = Range::NodeLevel;
     using NodeType = Range::NodeType;
     using Token = Range::Token;
     using BaseNode = Range::BaseNode;
@@ -17,36 +19,100 @@ namespace zepo::semver {
         return std::isdigit(ch) || ch == '.' || ch == '-' || isalpha(ch) || ch == '*' || ch == '+';
     }
 
+    inline size_t parseVersionPattern(const std::string_view& view, std::optional<int>& output, size_t begin = 0) {
+        auto patternEnd = view.find('.', begin);
+        if (patternEnd == -1) {
+            patternEnd = view.size();
+        }
+
+        const auto patternStr = view.substr(begin, patternEnd);
+        if (patternStr != "*" && patternStr != "x" && patternStr != "X") {
+            int val{};
+            std::from_chars(patternStr.data(), patternStr.data() + patternStr.size(), val);
+            output.emplace(val);
+        }
+
+        return patternEnd;
+    }
+
+    void Range::VersionNode::parse() {
+        const std::string_view view{pattern};
+
+        auto majorEnd = parseVersionPattern(view, major_);
+        if (majorEnd == view.size()) return;
+
+        auto minorEnd = parseVersionPattern(view, minor_, majorEnd + 1);
+        if (minorEnd == view.size()) return;
+
+        parseVersionPattern(view, minor_, minorEnd + 1);
+        parsed_ = true;
+    }
+
+    NodeLevel Range::VersionNode::getNodeLevel() {
+        return NodeLevel::Comparsion;
+    }
+
     NodeType Range::VersionNode::getNodeType() {
-        return Comparsion;
+        return NodeType::Version;
     }
 
     bool Range::VersionNode::execute(const Version& version) {
-        return false;
+        if (!parsed_) parse();
+
+        if (major_.has_value()) {
+            if (major_.value() != version.getMajor()) {
+                return false;
+            }
+        }
+
+        if (minor_.has_value()) {
+            if (minor_.value() != version.getMinor()) {
+                return false;
+            }
+        }
+
+        if (patch_.has_value()) {
+            if (patch_.value() != version.getPatch()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     Range::HyphenNode::HyphenNode(Version&& from, Version&& to)
         : from{std::move(from)}, to{std::move(to)} {
     }
 
+    NodeLevel Range::HyphenNode::getNodeLevel() {
+        return NodeLevel::Comparsion;
+    }
+
     NodeType Range::HyphenNode::getNodeType() {
-        return Comparsion;
+        return NodeType::Hyphen;
     }
 
     bool Range::HyphenNode::execute(const Version& version) {
         return version >= from && version <= to;
     }
 
+    NodeLevel Range::AndNode::getNodeLevel() {
+        return NodeLevel::Comparsion;
+    }
+
     NodeType Range::AndNode::getNodeType() {
-        return Comparsion;
+        return NodeType::And;
     }
 
     bool Range::AndNode::execute(const Version& version) {
         return left->execute(version) && right->execute(version);
     }
 
+    NodeLevel Range::OrNode::getNodeLevel() {
+        return NodeLevel::Union;
+    }
+
     NodeType Range::OrNode::getNodeType() {
-        return Union;
+        return NodeType::Or;
     }
 
     bool Range::OrNode::execute(const Version& version) {
@@ -57,53 +123,59 @@ namespace zepo::semver {
         : comparsionType(compareType), target{std::move(target)} {
     }
 
+    NodeLevel Range::CompareNode::getNodeLevel() {
+        return NodeLevel::Comparsion;
+    }
+
     NodeType Range::CompareNode::getNodeType() {
-        return Comparsion;
+        return NodeType::Compare;
     }
 
     bool Range::CompareNode::execute(const Version& version) {
-        if (comparsionType == Lt) {
+        if (comparsionType == TokenType::Lt) {
             return version < target;
         }
 
-        if (comparsionType == LtEq) {
+        if (comparsionType == TokenType::LtEq) {
             return version <= target;
         }
 
-        if (comparsionType == Gt) {
+        if (comparsionType == TokenType::Gt) {
             return version > target;
         }
 
-        if (comparsionType == GtEq) {
+        if (comparsionType == TokenType::GtEq) {
             return version >= target;
         }
 
-        if (comparsionType == Eq) {
+        if (comparsionType == TokenType::Eq) {
             return version == target;
         }
 
-        if (comparsionType == Caret) {
+        if (comparsionType == TokenType::Caret) {
             return version ^ target;
         }
 
-        if (comparsionType == Tilde) {
+        if (comparsionType == TokenType::Tilde) {
             return version | target;
         }
 
-        throw std::runtime_error("unknown comparsion operator: " + std::to_string(comparsionType));
+        throw std::runtime_error("unknown comparsion operator: " + std::to_string(static_cast<int>(comparsionType)));
     }
 
     Generator<Token> Range::lexer(const std::string_view expression) {
         using namespace std::string_literals;
+
+        // parse token and co_yield them simply
         for (size_t current = 0; current < expression.size();) {
             auto currentChar{expression[current]};
 
             if (currentChar == '^') {
                 current++;
-                co_yield {Caret};
+                co_yield {TokenType::Caret};
             } else if (currentChar == '~') {
                 current++;
-                co_yield {Tilde};
+                co_yield {TokenType::Tilde};
             } else if (currentChar == '*' || std::isdigit(currentChar) || currentChar == 'v' || currentChar == 'V') {
                 if (currentChar == 'v' || currentChar == 'V') {
                     current++;
@@ -143,10 +215,10 @@ namespace zepo::semver {
                     current++;
                 }
 
-                co_yield {VersionLiteral, expression.substr(begin, current - begin)};
+                co_yield {TokenType::Version, expression.substr(begin, current - begin)};
             } else if (currentChar == '=') {
                 current++;
-                co_yield {Eq};
+                co_yield {TokenType::Eq};
             } else if (isspace(currentChar)) {
                 current++;
             } else if (currentChar == '|') {
@@ -158,28 +230,28 @@ namespace zepo::semver {
                 }
 
                 current++;
-                co_yield {Or};
+                co_yield {TokenType::Or};
             } else if (currentChar == '>') {
                 // Gt or GtEq
                 current++;
                 if (expression[current] == '=') {
                     current++;
-                    co_yield {GtEq};
+                    co_yield {TokenType::GtEq};
                 }
 
-                co_yield {Gt};
+                co_yield {TokenType::Gt};
             } else if (currentChar == '<') {
                 // Lt or LtEq
                 current++;
                 if (expression[current] == '=') {
                     current++;
-                    co_yield {LtEq};
+                    co_yield {TokenType::LtEq};
                 }
 
-                co_yield {LtEq};
+                co_yield {TokenType::LtEq};
             } else if (currentChar == '-') {
                 current++;
-                co_yield {Hyphen};
+                co_yield {TokenType::Hyphen};
             } else {
                 throw std::runtime_error("lexer error: invalid charactor at :" + std::to_string(current));
             }
@@ -188,36 +260,38 @@ namespace zepo::semver {
 
     std::unique_ptr<BaseNode> Range::parser(Generator<Token>& tokenStream) {
         UniqueNode currentNode{nullptr};
-        NodeType currentType{Comparsion};
+        NodeLevel currentLevel{NodeLevel::Comparsion};
 
         while (tokenStream.moveNext()) {
-            auto* current = &tokenStream.getCurrent();
+            auto* currentToken = &tokenStream.getCurrent();
 
-            // parse basic
-            if (currentType <= Comparsion) {
-                if (current->type == Caret
-                    || current->type == Gt
-                    || current->type == GtEq
-                    || current->type == Eq
-                    || current->type == Lt
-                    || current->type == LtEq
-                    || current->type == Tilde) {
+            // comparsion or matches expr
+            if (currentLevel <= NodeLevel::Comparsion) {
+                // comparsion
+                if (currentToken->type == TokenType::Caret
+                    || currentToken->type == TokenType::Gt
+                    || currentToken->type == TokenType::GtEq
+                    || currentToken->type == TokenType::Eq
+                    || currentToken->type == TokenType::Lt
+                    || currentToken->type == TokenType::LtEq
+                    || currentToken->type == TokenType::Tilde) {
                     // comparsion version
-                    auto comparsionType = current->type;
+                    const auto comparsionType = currentToken->type;
 
                     if (!tokenStream.moveNext()) {
                         throw std::runtime_error(
                             "parser error: unexpected eof");
                     }
 
-                    current = &tokenStream.getCurrent();
+                    currentToken = &tokenStream.getCurrent();
 
-                    if (current->type != VersionLiteral) {
+                    if (currentToken->type != TokenType::Version) {
                         throw std::runtime_error(
-                            "parser error: expected VersionLiteral, but found " + std::to_string(current->type));
+                            "parser error: expected VersionLiteral, but found "
+                            + std::to_string(static_cast<int>(currentToken->type)));
                     }
 
-                    UniqueNode createdNode{new CompareNode{comparsionType, Version{current->value}}};
+                    UniqueNode createdNode{new CompareNode{comparsionType, Version{currentToken->value}}};
                     if (currentNode) {
                         auto* andNode = new AndNode{};
                         andNode->left = std::move(currentNode);
@@ -230,24 +304,54 @@ namespace zepo::semver {
                     continue;
                 }
 
-                if (current->type == VersionLiteral) {
-                    UniqueNode createdNode{new VersionNode{}};
+                // version matching (x-range etc.)
+                if (currentToken->type == TokenType::Version) {
+                    const auto createdNode = new VersionNode{};
+                    createdNode->pattern = currentToken->value;
+
                     if (currentNode) {
                         auto* andNode = new AndNode{};
                         andNode->left = std::move(currentNode);
-                        andNode->right = std::move(createdNode);
+                        andNode->right = UniqueNode{createdNode};
                         currentNode = UniqueNode{andNode};
                     } else {
-                        currentNode = std::move(createdNode);
+                        currentNode = UniqueNode{createdNode};
                     }
                     continue;
+                }
+
+                // from some version to another version
+                if (currentToken->type == TokenType::Hyphen) {
+                    if (auto nodeType = currentNode->getNodeType(); nodeType != NodeType::Version) {
+                        throw std::runtime_error("parser error: expected VersionLiteral, but found "
+                                                 + std::to_string(static_cast<int>(nodeType)));
+                    }
+
+                    Version from{dynamic_cast<VersionNode*>(currentNode.get())->pattern};
+
+                    if (!tokenStream.moveNext()) {
+                        throw std::runtime_error(
+                            "parser error: unexpected eof");
+                    }
+
+                    currentToken = &tokenStream.getCurrent();
+
+                    if (currentToken->type != TokenType::Version) {
+                        throw std::runtime_error(
+                            "parser error: expected VersionLiteral, but found "
+                            + std::to_string(static_cast<int>(currentToken->type)));
+                    }
+
+                    Version to{currentToken->value};
+                    currentNode = UniqueNode{new HyphenNode{std::move(from), std::move(to)}};
                 }
             }
 
             // parse ||
-            if (currentType <= Union) {
-                if (current->type == Or) {
-                    currentType = Union;
+            // if (currentType <= Union) { // FIXME: always true
+            {
+                if (currentToken->type == TokenType::Or) {
+                    currentLevel = NodeLevel::Union;
 
                     auto* orNode = new OrNode{};
                     orNode->left = std::move(currentNode);

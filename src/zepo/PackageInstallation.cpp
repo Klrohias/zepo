@@ -4,10 +4,10 @@
 
 #include "PackageInstallation.hpp"
 
-#include <iostream>
 #include <ranges>
 
 #include "Configuration.hpp"
+#include "Global.hpp"
 #include "NpmProtocol.hpp"
 #include "async/TaskUtils.hpp"
 #include "network/CurlAsyncIO.hpp"
@@ -16,12 +16,10 @@
 #include "serialize/Json.hpp"
 #include "serialize/Serializer.hpp"
 
-extern zepo::Configuration globalConfiguration;
-
 namespace zepo {
     using namespace std::string_literals;
 
-    Task<> PackageResolvingContext::buildDependenciesTree(const std::string& name) {
+    Task<> PackageInstallingContext::buildDependenciesTree(const std::string& name) {
         // fetch package info from registry
         const auto url = globalConfiguration.registry + "/" + name;
 
@@ -57,11 +55,9 @@ namespace zepo {
         if (result == versions.rend()) {
             throw std::runtime_error("Failed to find suitable version for package: \""s + name + "\"");
         }
-
-        std::cout << "best version of: " << name << ": " << result->first;
     }
 
-    void PackageResolvingContext::addRequirement(const std::string_view name, const std::string_view source) {
+    void PackageInstallingContext::addRequirement(const std::string_view name, const std::string_view source) {
         if (const auto it = requirements_.find(name); it != requirements_.end()) {
             it->second.insert(std::string{source});
         } else {
@@ -69,7 +65,7 @@ namespace zepo {
         }
     }
 
-    Task<> PackageResolvingContext::resolveRequirements() {
+    Task<> PackageInstallingContext::resolveRequirements() {
         std::vector<Task<>> tasks{};
 
         for (const auto& name: requirements_ | std::views::keys) {

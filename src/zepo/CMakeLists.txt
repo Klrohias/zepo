@@ -25,9 +25,12 @@ add_executable(zepo main.cpp
         semver/Range.cpp
         semver/Range.hpp
         async/Generator.hpp
+        Global.hpp
+        Global.cpp
 )
 
 target_compile_features(zepo PRIVATE cxx_std_20)
 target_link_libraries(zepo PRIVATE CURL::libcurl)
 target_link_libraries(zepo PRIVATE yyjson::yyjson)
 target_link_libraries(zepo PRIVATE semver)
+target_link_libraries(zepo PRIVATE quickjs-universal)
