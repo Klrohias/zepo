@@ -17,7 +17,7 @@
 #include "PackageInstallation.hpp"
 #include "async/Generator.hpp"
 #include "Global.hpp"
-#include "diagnostics/PerfDiagnosticsContext.hpp"
+#include "diagnostics/PerfDiagnostics.hpp"
 
 using namespace zepo;
 
@@ -57,9 +57,9 @@ Task<> performInstall() {
     for (const auto& [packageName, source]: packageManifest.devDependencies) {
         co_await context.addRequirement(packageManifest.name, packageName, source);
     }
-    ZEPO_PERF_END_(performInstall)
 
     co_await context.resolveRequirements();
+    ZEPO_PERF_END_(performInstall)
 }
 
 void showHelp() {
@@ -75,10 +75,12 @@ Task<int> asyncMain(int argc, char** argv) {
     try {
         bool shouldShowHelp{false};
 
+        const std::string_view command{argv[0]};
         if (argc == 0) {
             shouldShowHelp = true;
-        } else if (std::string_view(argv[0]) == "install") {
+        } else if (command == "install") {
             co_await performInstall();
+        } else if (command == "get-package") {
         } else {
             shouldShowHelp = true;
         }
@@ -91,6 +93,12 @@ Task<int> asyncMain(int argc, char** argv) {
     }
 
     co_return 0;
+}
+
+inline void createDirectoryIfNeed(const std::filesystem::path& path) {
+    if (!is_directory(path)) {
+        create_directory(path);
+    }
 }
 
 void initGlobals(int argc, char** argv) {
@@ -115,13 +123,19 @@ void initGlobals(int argc, char** argv) {
     applicationPaths.packagesPath = rootPath / "packages";
     applicationPaths.downloadsPath = rootPath / "downloads";
     applicationPaths.buildsPath = rootPath / "builds";
+
+    // mkdirs
+    createDirectoryIfNeed(applicationPaths.packagesPath);
+    createDirectoryIfNeed(applicationPaths.downloadsPath);
+    createDirectoryIfNeed(applicationPaths.buildsPath);
 }
 
 int main(int argc, char** argv) {
     initGlobals(argc, argv);
+
     auto mainTask = asyncMain(argc, argv);
     const auto result = mainTask.getValue();;
 
-    PerfDiagnosticsContext::getDefault().printTimes();
+    PerfDiagnostics::getDefault().printTimes();
     return result;
 }

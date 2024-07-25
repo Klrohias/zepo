@@ -4,15 +4,25 @@
 
 #include "CurlAsyncIO.hpp"
 
-#include "zepo/diagnostics/PerfDiagnosticsContext.hpp"
+#include "zepo/diagnostics/PerfDiagnostics.hpp"
 
 namespace zepo::async_io {
     static size_t curlStringWriter(void* buffer, size_t size, size_t count, void* result) {
-        ZEPO_PERF_BEGIN_(curlAppend)
         static_cast<std::string*>(result)->append(static_cast<char*>(buffer), size * count);
-        ZEPO_PERF_END_(curlAppend)
-
         return size * count;
+    }
+
+    Task<> curlExecuteAsync(const std::function<void(CURL*)>& configAction) {
+        CURL* instance = curl_easy_init();
+        try {
+            configAction(instance);
+            co_await curlEasyPerformAsync(instance);
+            curl_easy_cleanup(instance);
+        } catch (...) {
+            const auto exception = std::current_exception();
+            curl_easy_cleanup(instance);
+            std::rethrow_exception(exception);
+        }
     }
 
     Task<> async_io::curlEasyPerformAsync(CURL* curlInstance) {
@@ -25,17 +35,14 @@ namespace zepo::async_io {
         co_await curlEasyPerformAsync(curlInstance.get());
     }
 
-    Task<std::string> curlEasyRequestAsync(const std::function<void(CURL*)>& configAction) {
-        CURL* instance = curl_easy_init();
+    Task<std::string> curlExecuteStringAsync(const std::function<void(CURL*)>& configAction) {
         std::string result{};
 
-        curl_easy_setopt(instance, CURLOPT_WRITEFUNCTION, curlStringWriter);
-        curl_easy_setopt(instance, CURLOPT_WRITEDATA, &result);
-
-        configAction(instance);
-
-        co_await curlEasyPerformAsync(instance);
-        curl_easy_cleanup(instance);
+        co_await curlExecuteAsync([&] (CURL* instance){
+            curl_easy_setopt(instance, CURLOPT_WRITEFUNCTION, curlStringWriter);
+            curl_easy_setopt(instance, CURLOPT_WRITEDATA, &result);
+            configAction(instance);
+        });
 
         co_return result;
     }

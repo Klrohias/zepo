@@ -1,15 +1,15 @@
 {
-  "name": "zepo",
-  "version-string": "1.0.0",
-  "builtin-baseline": "198d68dbcc6c907cb3d0b9b1d93c3df6ecf93c62",
-  "dependencies": [
-    {
-      "name": "yyjson",
-      "version>=": "0.10.0"
-    },
-    {
-      "name": "curl",
-      "version>=": "8.6.0"
-    }
-  ]
+  "name" : "zepo",
+  "version-string" : "1.0.0",
+  "builtin-baseline" : "198d68dbcc6c907cb3d0b9b1d93c3df6ecf93c62",
+  "dependencies" : [ {
+    "name" : "yyjson",
+    "version>=" : "0.10.0"
+  }, {
+    "name" : "curl",
+    "version>=" : "8.6.0"
+  }, {
+    "name" : "libarchive",
+    "version>=" : "3.7.2"
+  } ]
 }

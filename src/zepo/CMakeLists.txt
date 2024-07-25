@@ -27,8 +27,9 @@ add_executable(zepo main.cpp
         async/Generator.hpp
         Global.hpp
         Global.cpp
-        diagnostics/PerfDiagnosticsContext.cpp
-        diagnostics/PerfDiagnosticsContext.hpp
+        diagnostics/PerfDiagnostics.cpp
+        diagnostics/PerfDiagnostics.hpp
+        NpmProtocol.cpp
 )
 
 target_compile_features(zepo PRIVATE cxx_std_20)

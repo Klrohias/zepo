@@ -14,22 +14,22 @@
 #include "semver/Range.hpp"
 
 namespace zepo {
-    class NpmPackageInfo;
+    struct NpmPackageInfo;
 
     class PackageInstallingContext {
-        struct PackageSelecting {
+        struct PackageSelect {
             std::string source;
             std::string name;
             std::string required;
             std::string selected;
+
+            std::string tarball;
         };
 
         std::map<std::string, semver::Range, std::less<>> versionRangeCaches_{};
-        std::vector<PackageSelecting> packageSelectings_{};
+        std::vector<PackageSelect> packageSelect_{};
 
-        semver::Range getRange(std::string_view expr);
-
-        static Task<NpmPackageInfo> fetchPackageInfo(std::string_view packageName);
+        const semver::Range& getRange(std::string_view expr);
 
     public:
         Task<> addRequirement(std::string_view source, std::string_view name, std::string_view version);

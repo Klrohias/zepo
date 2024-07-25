@@ -150,6 +150,15 @@ namespace zepo {
     };
 
     template<typename T, typename TokenType>
+    struct ParseTraits<std::optional<T>, TokenType> {
+        using Optional = std::optional<T>;
+
+        static Optional parse(const TokenType& token) {
+            return {ParseTraits<T, TokenType>::parse(token)};
+        }
+    };
+
+    template<typename T, typename TokenType>
     T parse(const TokenType& token) {
         return ParseTraits<T, TokenType>::parse(token);
     }

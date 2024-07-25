@@ -4,13 +4,17 @@
 
 #include "PackageInstallation.hpp"
 
+#include <fstream>
+#include <iostream>
 #include <ranges>
+#include <optional>
+#include <quickjs.h>
 
 #include "Configuration.hpp"
 #include "Global.hpp"
 #include "NpmProtocol.hpp"
 #include "async/TaskUtils.hpp"
-#include "diagnostics/PerfDiagnosticsContext.hpp"
+#include "diagnostics/PerfDiagnostics.hpp"
 #include "network/CurlAsyncIO.hpp"
 #include "semver/Range.hpp"
 #include "semver/Semver.hpp"
@@ -20,71 +24,13 @@
 namespace zepo {
     using namespace std::string_literals;
 
-    // Task<> PackageInstallingContext::buildDependenciesTree(const std::string& name) {
-    //     // fetch package info from registry
-    //     const auto url = globalConfiguration.registry + "/" + name;
-    //
-    //     const auto jsonDoc = JsonDocument{
-    //         co_await async_io::curlEasyRequestAsync([&](CURL* instance) {
-    //             curl_easy_setopt(instance, CURLOPT_URL, url.data());
-    //             curl_easy_setopt(instance, CURLOPT_NOSIGNAL, 1);
-    //         })
-    //     };
-    //
-    //     auto npmPackageInfo = parse<NpmPackageInfo>(jsonDoc.getRootToken());
-    //
-    //     // find suitable version
-    //     const auto& versions = npmPackageInfo.versions;
-    //     const auto& versionRequirements = requirements_[name];
-    //
-    //     const auto result = std::find_if
-    //     (
-    //         versions.rbegin(),
-    //         versions.rend(),
-    //         [&](const std::pair<const std::string, NpmPackageVersion>& requriement) {
-    //             const semver::Version currentSemver{requriement.first};
-    //
-    //             return std::ranges::all_of(
-    //                 versionRequirements.begin(),
-    //                 versionRequirements.end(),
-    //                 [&](const std::string& it) {
-    //                     return semver::Range{it}.satisfies(currentSemver);
-    //                 });
-    //         }
-    //     );
-    //
-    //     if (result == versions.rend()) {
-    //         throw std::runtime_error("Failed to find suitable version for package: \""s + name + "\"");
-    //     }
-    // }
+    const semver::Range& PackageInstallingContext::getRange(std::string_view expr) {
+        if (const auto result = versionRangeCaches_.find(expr); result != versionRangeCaches_.end()) {
+            return result->second;
+        }
 
-    semver::Range PackageInstallingContext::getRange(const std::string_view expr) {
-        // if (const auto rangeIter = versionRangeCaches_.find(expr); rangeIter != versionRangeCaches_.end()) {
-        //     return rangeIter->second;
-        // }
-        //
-        // auto parsedRange = ;
-        // versionRangeCaches_.try_emplace(std::string{expr}, parsedRange);
-        return semver::Range{expr};
-    }
-
-    Task<NpmPackageInfo> PackageInstallingContext::fetchPackageInfo(std::string_view packageName) {
-        // fetch package info from registry
-        const auto url = globalConfiguration.registry + "/" + std::string{packageName};
-
-        ZEPO_PERF_BEGIN_(curlExecuteForPackageInfo)
-        auto response = co_await async_io::curlEasyRequestAsync([&](CURL* instance) {
-            curl_easy_setopt(instance, CURLOPT_URL, url.data());
-            curl_easy_setopt(instance, CURLOPT_NOSIGNAL, 1);
-        });
-        ZEPO_PERF_END_(curlExecuteForPackageInfo)
-
-        ZEPO_PERF_BEGIN_(parsePackageInfo)
-        const auto jsonDoc = JsonDocument{response};
-        auto result = parse<NpmPackageInfo>(jsonDoc.getRootToken());
-        ZEPO_PERF_END_(parsePackageInfo)
-
-        co_return result;
+        auto range = semver::Range{expr};
+        return versionRangeCaches_.try_emplace(std::string{expr}, range).first->second;
     }
 
     Task<> PackageInstallingContext::addRequirement(std::string_view source, std::string_view name,
@@ -97,37 +43,46 @@ namespace zepo {
             // internet
         } else {
             // semver
-            ZEPO_PERF_BEGIN_(compileRangeExpr)
+            ZEPO_PERF_BEGIN_(compileOrFindRangeExpr)
             const auto range = getRange(version);
-            ZEPO_PERF_END_(compileRangeExpr)
+            ZEPO_PERF_END_(compileOrFindRangeExpr)
 
-            ZEPO_PERF_BEGIN_(fetchPackageInfo)
-            const auto packageInfo = co_await fetchPackageInfo(name);
-            ZEPO_PERF_END_(fetchPackageInfo)
+            std::optional<std::string_view> authUsername;
+            std::optional<std::string_view> authPassword;
+            if (globalConfiguration.authUsername.has_value()) {
+                authUsername = {globalConfiguration.authUsername.value()};
+            }
+
+            if (globalConfiguration.authPassword.has_value()) {
+                authPassword = {globalConfiguration.authPassword.value()};
+            }
+
+            const auto packageInfo =
+                    co_await npmFetchMetadata(globalConfiguration.registry + "/" + std::string{name},
+                                              authUsername, authPassword);
 
             auto& versions = packageInfo.versions;
 
-            ZEPO_PERF_BEGIN_(matchVersions)
+            ZEPO_PERF_BEGIN_(findSutiableVersion)
             auto iter = versions.rbegin();
             for (; iter != versions.rend(); ++iter) {
                 if (range.satisfies(semver::Version{iter->first}))
                     break;
             }
-            ZEPO_PERF_END_(matchVersions)
+            ZEPO_PERF_END_(findSutiableVersion)
 
             // not found
             if (iter == versions.rend()) {
                 throw std::runtime_error("Failed to find suitable version for package: \"" + std::string{name} + "\"");
             }
 
-            ZEPO_PERF_BEGIN_(pushSelectings)
-            packageSelectings_.push_back({
+            packageSelect_.push_back({
                 std::string{source},
                 std::string{name},
                 std::string{version},
-                iter->first
+                iter->first,
+                iter->second.dist.tarball
             });
-            ZEPO_PERF_END_(pushSelectings)
 
             // find depencencies
             for (auto& [nextName, nextVersion]: iter->second.dependencies) {
@@ -138,6 +93,36 @@ namespace zepo {
 
 
     Task<> PackageInstallingContext::resolveRequirements() {
+        ZEPO_PERF_BEGIN_(downloadPackages)
+
+        // std::map<std::string, int>
+
+        std::optional<std::string_view> authUsername;
+        std::optional<std::string_view> authPassword;
+        if (globalConfiguration.authUsername.has_value()) {
+            authUsername = {globalConfiguration.authUsername.value()};
+        }
+
+        if (globalConfiguration.authPassword.has_value()) {
+            authPassword = {globalConfiguration.authPassword.value()};
+        }
+
+        for (const auto& select: packageSelect_) {
+            const auto outputPath = applicationPaths.downloadsPath / std::filesystem::path{select.tarball}.filename();
+            if (exists(outputPath)) continue;
+
+            const auto outputPathStr = outputPath.string();
+
+            std::cout << "downloading: " << select.tarball << " to " << outputPathStr << std::endl;
+            std::fstream outputStream{outputPath, std::fstream::out | std::fstream::binary};
+            if (!outputStream.good()) {
+                throw std::runtime_error("failed to open " + outputPathStr + " for package downloading");
+            }
+
+            co_await npmDownloadTarball(select.tarball, authUsername, authPassword, outputStream);
+        }
+
+        ZEPO_PERF_END_(downloadPackages)
         co_return;
     }
 }

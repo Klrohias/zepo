@@ -12,11 +12,13 @@
 
 
 namespace zepo::async_io {
+    Task<> curlExecuteAsync(const std::function<void(CURL*)>& configAction);
+
     Task<> curlEasyPerformAsync(CURL* curlInstance);
 
     Task<> curlEasyPerformAsync(const std::shared_ptr<CURL>& curlInstance);
 
-    Task<std::string> curlEasyRequestAsync(const std::function<void(CURL*)>& configAction);
+    Task<std::string> curlExecuteStringAsync(const std::function<void(CURL*)>& configAction);
 }
 
 
