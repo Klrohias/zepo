@@ -11,15 +11,28 @@
 #include <string_view>
 
 #include "async/Task.hpp"
+#include "semver/Range.hpp"
 
 namespace zepo {
-    class PackageInstallingContext {
-        std::map<std::string, std::set<std::string>, std::less<>> requirements_{};
+    class NpmPackageInfo;
 
-        Task<> buildDependenciesTree(const std::string& name);
+    class PackageInstallingContext {
+        struct PackageSelecting {
+            std::string source;
+            std::string name;
+            std::string required;
+            std::string selected;
+        };
+
+        std::map<std::string, semver::Range, std::less<>> versionRangeCaches_{};
+        std::vector<PackageSelecting> packageSelectings_{};
+
+        semver::Range getRange(std::string_view expr);
+
+        static Task<NpmPackageInfo> fetchPackageInfo(std::string_view packageName);
 
     public:
-        void addRequirement(std::string_view name, std::string_view source);
+        Task<> addRequirement(std::string_view source, std::string_view name, std::string_view version);
 
         Task<> resolveRequirements();
     };

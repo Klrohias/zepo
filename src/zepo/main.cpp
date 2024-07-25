@@ -17,6 +17,7 @@
 #include "PackageInstallation.hpp"
 #include "async/Generator.hpp"
 #include "Global.hpp"
+#include "diagnostics/PerfDiagnosticsContext.hpp"
 
 using namespace zepo;
 
@@ -46,15 +47,17 @@ Task<Package> readPackageManifest() {
 Task<> performInstall() {
     const auto packageManifest = co_await readPackageManifest();
 
+    ZEPO_PERF_BEGIN_(performInstall)
     PackageInstallingContext context;
 
     for (const auto& [packageName, source]: packageManifest.dependencies) {
-        context.addRequirement(packageName, source);
+        co_await context.addRequirement(packageManifest.name, packageName, source);
     }
 
     for (const auto& [packageName, source]: packageManifest.devDependencies) {
-        context.addRequirement(packageName, source);
+        co_await context.addRequirement(packageManifest.name, packageName, source);
     }
+    ZEPO_PERF_END_(performInstall)
 
     co_await context.resolveRequirements();
 }
@@ -116,7 +119,9 @@ void initGlobals(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     initGlobals(argc, argv);
-
     auto mainTask = asyncMain(argc, argv);
-    return mainTask.getValue();
+    const auto result = mainTask.getValue();;
+
+    PerfDiagnosticsContext::getDefault().printTimes();
+    return result;
 }

@@ -4,9 +4,14 @@
 
 #include "CurlAsyncIO.hpp"
 
+#include "zepo/diagnostics/PerfDiagnosticsContext.hpp"
+
 namespace zepo::async_io {
     static size_t curlStringWriter(void* buffer, size_t size, size_t count, void* result) {
+        ZEPO_PERF_BEGIN_(curlAppend)
         static_cast<std::string*>(result)->append(static_cast<char*>(buffer), size * count);
+        ZEPO_PERF_END_(curlAppend)
+
         return size * count;
     }
 

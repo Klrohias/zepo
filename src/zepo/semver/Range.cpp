@@ -44,7 +44,7 @@ namespace zepo::semver {
         auto minorEnd = parseVersionPattern(view, minor_, majorEnd + 1);
         if (minorEnd == view.size()) return;
 
-        parseVersionPattern(view, minor_, minorEnd + 1);
+        parseVersionPattern(view, patch_, minorEnd + 1);
         parsed_ = true;
     }
 
@@ -237,6 +237,7 @@ namespace zepo::semver {
                 if (expression[current] == '=') {
                     current++;
                     co_yield {TokenType::GtEq};
+                    continue;
                 }
 
                 co_yield {TokenType::Gt};
@@ -246,9 +247,10 @@ namespace zepo::semver {
                 if (expression[current] == '=') {
                     current++;
                     co_yield {TokenType::LtEq};
+                    continue;
                 }
 
-                co_yield {TokenType::LtEq};
+                co_yield {TokenType::Lt};
             } else if (currentChar == '-') {
                 current++;
                 co_yield {TokenType::Hyphen};

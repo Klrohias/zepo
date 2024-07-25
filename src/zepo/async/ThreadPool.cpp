@@ -12,7 +12,7 @@ namespace zepo
     {
         auto detectedCount = std::thread::hardware_concurrency();
         if (!detectedCount) detectedCount = 1;
-        return static_cast<int>(detectedCount);
+        return static_cast<int>(detectedCount * 2);
     }
 
     ThreadPool ThreadPool::defaultPool_{detectProcessorCount(), true};

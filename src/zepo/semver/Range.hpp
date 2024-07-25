@@ -73,7 +73,6 @@ namespace zepo::semver {
 
             NodeType getNodeType() override;
 
-
             bool execute(const Version& version) override;
         };
 

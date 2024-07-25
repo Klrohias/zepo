@@ -29,6 +29,7 @@ namespace zepo {
     struct NpmPackageVersion {
         std::string version;
         NpmPackageDist dist;
+        std::map<std::string, std::string> dependencies;
     };
 }
 
@@ -41,6 +42,7 @@ ZEPO_REFLECT_PARSABLE_(zepo::NpmPackageInfo);
 ZEPO_REFLECT_INFO_BEGIN_(zepo::NpmPackageVersion)
     ZEPO_REFLECT_FIELD_(version);
     ZEPO_REFLECT_FIELD_(dist);
+    ZEPO_REFLECT_FIELD_(dependencies);
 ZEPO_REFLECT_INFO_END_()
 ZEPO_REFLECT_PARSABLE_(zepo::NpmPackageVersion);
 
