@@ -4,7 +4,10 @@
 
 #include "NpmProtocol.hpp"
 
-#include <span>
+#include <archive.h>
+#include <archive_entry.h>
+#include <fstream>
+#include <string>
 
 #include "diagnostics/PerfDiagnostics.hpp"
 #include "network/CurlAsyncIO.hpp"
@@ -12,6 +15,12 @@
 #include "serialize/Serializer.hpp"
 
 namespace zepo {
+    inline void createDirectoriesIfNeed(const std::filesystem::path& path) {
+        if (!is_directory(path)) {
+            create_directories(path);
+        }
+    }
+
     static size_t curlStreamWriter(const void* data, const size_t size, const size_t count, void* typelessStreamPtr) {
         auto* streamPtr = static_cast<std::iostream*>(typelessStreamPtr);
         streamPtr->write(static_cast<const char*>(data), size * count);
@@ -67,5 +76,74 @@ namespace zepo {
             configureNpmAuth(instance, username, password);
         });
         ZEPO_PERF_END_(downloadNpmTarball)
+    }
+
+    static int copyEntryData(archive* reader, std::iostream& stream) {
+        const void* buffer;
+        size_t size;
+        la_int64_t offset;
+
+        while (true) {
+            auto result = archive_read_data_block(reader, &buffer, &size, &offset);
+
+            if (result == ARCHIVE_EOF)
+                return ARCHIVE_OK;
+
+            if (result != ARCHIVE_OK)
+                return result;
+
+            stream.seekp(offset, std::ios::beg);
+            stream.write(static_cast<const char*>(buffer), static_cast<std::streamsize>(size));
+        }
+    }
+
+
+    Task<> npmDecompressArchive(const std::filesystem::path& path, const std::filesystem::path& destination) {
+        co_await TaskUtils::run<void>([&] {
+            using namespace std::string_literals;
+            archive* archiveReader{archive_read_new()};
+            archive_entry* entry;
+            try {
+                archive_read_support_format_tar(archiveReader);
+                archive_read_support_filter_all(archiveReader);
+                auto result = archive_read_open_filename_w(archiveReader, path.c_str(), 1024 * 16); // 16k
+                if (result != ARCHIVE_OK) {
+                    throw std::runtime_error("libarchive error: "s + archive_error_string(archiveReader));
+                }
+
+                while (true) {
+                    result = archive_read_next_header(archiveReader, &entry);
+                    if (result == ARCHIVE_EOF) {
+                        break;
+                    }
+                    if (result != ARCHIVE_OK) {
+                        throw std::runtime_error("libarchive error: "s + archive_error_string(archiveReader));
+                    }
+
+                    if (archive_entry_size(entry) == 0) {
+                        continue;
+                    }
+
+                    const auto extractPath = destination / archive_entry_pathname(entry);
+                    createDirectoriesIfNeed(extractPath.parent_path());
+
+                    std::fstream fileStream{extractPath, std::ios::out | std::ios::binary};
+                    if (!fileStream.good()) {
+                        throw std::runtime_error("failed to open " + extractPath.string() + " for extracting");
+                    }
+
+                    result = copyEntryData(archiveReader, fileStream);
+                    if (result != ARCHIVE_OK) {
+                        throw std::runtime_error("libarchive error: "s + archive_error_string(archiveReader));
+                    }
+                }
+
+                archive_read_free(archiveReader);
+            } catch (...) {
+                const auto exception = std::current_exception();
+                archive_read_free(archiveReader);
+                std::rethrow_exception(exception);
+            }
+        });
     }
 }

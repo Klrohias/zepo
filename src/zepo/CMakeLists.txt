@@ -1,6 +1,7 @@
 
 find_package(yyjson CONFIG REQUIRED)
 find_package(CURL REQUIRED)
+find_package(LibArchive REQUIRED)
 
 add_executable(zepo main.cpp
         async/Task.hpp
@@ -30,8 +31,10 @@ add_executable(zepo main.cpp
         diagnostics/PerfDiagnostics.cpp
         diagnostics/PerfDiagnostics.hpp
         NpmProtocol.cpp
+        PackageConfigInfo.hpp
 )
 
+target_link_libraries(zepo PRIVATE LibArchive::LibArchive)
 target_compile_features(zepo PRIVATE cxx_std_20)
 target_link_libraries(zepo PRIVATE CURL::libcurl)
 target_link_libraries(zepo PRIVATE yyjson::yyjson)

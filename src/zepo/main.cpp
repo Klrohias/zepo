@@ -33,7 +33,7 @@ Task<Configuration> readConfiguration(const std::string_view rootPath) {
     co_return parse<Configuration>(jsonDoc.getRootToken());
 }
 
-Task<Package> readPackageManifest() {
+Task<Package> readPackageManifest(bool openMutable = false) {
     const std::filesystem::path manifestPath{"package.json"};
     if (!exists(manifestPath)) {
         throw std::runtime_error("File \"package.json\" not found");
@@ -60,6 +60,10 @@ Task<> performInstall() {
 
     co_await context.resolveRequirements();
     ZEPO_PERF_END_(performInstall)
+}
+
+Task<> performGetPackage() {
+
 }
 
 void showHelp() {

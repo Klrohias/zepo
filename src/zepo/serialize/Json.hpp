@@ -10,16 +10,20 @@
 #include <yyjson.h>
 
 namespace zepo {
+    struct JsonDocument;
+
     struct JsonToken {
         using ForEachItemAction = std::function<bool(JsonToken)>;
         using ForEachKeyValueAction = std::function<bool(std::string_view, JsonToken)>;
 
     private:
         bool mutable_{false};
+
         union {
             yyjson_val* val_;
             yyjson_mut_val* mutableVal_;
         };
+        yyjson_mut_doc* mutableDoc_{nullptr};
 
         void checkObjectType(yyjson_type type) const;
 
@@ -28,9 +32,15 @@ namespace zepo {
     public:
         explicit JsonToken();
 
+        explicit JsonToken(JsonDocument& jsonDoc, bool isArray = false);
+
         explicit JsonToken(yyjson_val* val);
 
-        explicit JsonToken(yyjson_mut_val* val);
+        explicit JsonToken(yyjson_mut_doc* jsonDoc, yyjson_mut_val* val);
+
+        [[nodiscard]] yyjson_mut_val* getRawMutableValue() const;
+
+        [[nodiscard]] yyjson_val* getRawImmutableValue() const;
 
         [[nodiscard]] std::string toString() const;
 
@@ -54,25 +64,49 @@ namespace zepo {
 
         [[nodiscard]] uint64_t toUint64() const;
 
+        static JsonToken from(JsonDocument& jsonDoc, const std::string& value);
+
+        static JsonToken from(JsonDocument& jsonDoc, const double_t& value);
+
+        static JsonToken from(JsonDocument& jsonDoc, const float_t& value);
+
+        static JsonToken from(JsonDocument& jsonDoc, const int64_t& value);
+
+        static JsonToken from(JsonDocument& jsonDoc, const uint64_t& value);
+
+        static JsonToken from(JsonDocument& jsonDoc, const JsonToken& value);
+
+        static JsonToken fromNull(JsonDocument& jsonDoc);
+
         void forEach(const ForEachItemAction& action) const;
 
         void forEach(const ForEachKeyValueAction& action) const;
+
+        void appendChild(const JsonToken& token);
+
+        void appendChild(std::string_view key, const JsonToken& token);
     };
 
     struct JsonDocument {
+    private:
         std::shared_ptr<yyjson_doc> doc_{};
         std::shared_ptr<yyjson_mut_doc> mutableDoc_{};
         bool mutable_{false};
 
+    public:
         [[nodiscard]] JsonToken getRootToken() const;
 
         explicit JsonDocument(std::string_view content, bool openMutable = false);
 
         explicit JsonDocument();
-    };
 
-    struct JsonPropertyNameAttribute {
-        std::string name;
+        [[nodiscard]] yyjson_mut_doc* getRawMutableValue() const;
+
+        [[nodiscard]] yyjson_doc* getRawImmutableValue() const;
+
+        void setRoot(const JsonToken& rootToken);
+
+        std::string stringify();
     };
 }
 

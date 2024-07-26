@@ -32,12 +32,36 @@ namespace zepo {
     JsonToken::JsonToken(): mutableVal_{nullptr} {
     }
 
+    JsonToken::JsonToken(JsonDocument& jsonDoc, bool isArray)
+        : JsonToken(
+            jsonDoc.getRawMutableValue(),
+            isArray
+                ? yyjson_mut_arr(jsonDoc.getRawMutableValue())
+                : yyjson_mut_obj(jsonDoc.getRawMutableValue())
+        ) {
+    }
+
     JsonToken::JsonToken(yyjson_val* val) {
         val_ = val;
     }
 
-    JsonToken::JsonToken(yyjson_mut_val* val): mutable_{true} {
+    JsonToken::JsonToken(yyjson_mut_doc* jsonDoc, yyjson_mut_val* val)
+        : mutableDoc_{jsonDoc}, mutable_{true} {
         mutableVal_ = val;
+    }
+
+    yyjson_mut_val* JsonToken::getRawMutableValue() const {
+        if (!mutable_) {
+            throw std::runtime_error("Token is immutable");
+        }
+        return mutableVal_;
+    }
+
+    yyjson_val* JsonToken::getRawImmutableValue() const {
+        if (mutable_) {
+            throw std::runtime_error("Token is mutable");
+        }
+        return val_;
     }
 
     std::string JsonToken::toString() const {
@@ -99,6 +123,35 @@ namespace zepo {
         return static_cast<uint64_t>(toInt64());
     }
 
+    JsonToken JsonToken::from(JsonDocument& jsonDoc, const std::string& value) {
+        return JsonToken{jsonDoc.getRawMutableValue(), yyjson_mut_str(jsonDoc.getRawMutableValue(), value.c_str())};
+    }
+
+    JsonToken JsonToken::from(JsonDocument& jsonDoc, const double_t& value) {
+        return JsonToken{jsonDoc.getRawMutableValue(), yyjson_mut_real(jsonDoc.getRawMutableValue(), value)};
+    }
+
+    JsonToken JsonToken::from(JsonDocument& jsonDoc, const float_t& value) {
+        return JsonToken{jsonDoc.getRawMutableValue(), yyjson_mut_real(jsonDoc.getRawMutableValue(), (double_t) value)};
+    }
+
+    JsonToken JsonToken::from(JsonDocument& jsonDoc, const int64_t& value) {
+        return JsonToken{jsonDoc.getRawMutableValue(), yyjson_mut_int(jsonDoc.getRawMutableValue(), value)};
+    }
+
+    JsonToken JsonToken::from(JsonDocument& jsonDoc, const uint64_t& value) {
+        return from(jsonDoc, static_cast<int64_t>(value));
+    }
+
+    JsonToken JsonToken::from(JsonDocument& jsonDoc, const JsonToken& value) {
+        // TODO
+        throw std::runtime_error("method not impl");
+    }
+
+    JsonToken JsonToken::fromNull(JsonDocument& jsonDoc) {
+        return JsonToken{jsonDoc.getRawMutableValue(), yyjson_mut_null(jsonDoc.getRawMutableValue())};
+    }
+
     void JsonToken::forEach(const ForEachItemAction& action) const {
         checkObjectType(YYJSON_TYPE_ARR);
 
@@ -106,7 +159,7 @@ namespace zepo {
             size_t index, max;
             yyjson_mut_val* item;
             yyjson_mut_arr_foreach(mutableVal_, index, max, item) {
-                if (action(JsonToken{item})) break;
+                if (action(JsonToken{mutableDoc_, item})) break;
             }
 
             return;
@@ -127,7 +180,7 @@ namespace zepo {
             yyjson_mut_obj_iter_init(mutableVal_, &iter);
             yyjson_mut_val* key;
             while ((key = yyjson_mut_obj_iter_next(&iter))) {
-                if (action(yyjson_mut_get_str(key), JsonToken{yyjson_mut_obj_iter_get_val(key)})) break;
+                if (action(yyjson_mut_get_str(key), JsonToken{mutableDoc_, yyjson_mut_obj_iter_get_val(key)})) break;
             }
 
             return;
@@ -141,9 +194,27 @@ namespace zepo {
         }
     }
 
+    void JsonToken::appendChild(const JsonToken& token) {
+        if (!mutable_) {
+            throw std::runtime_error("Token is immutable");
+        }
+
+        checkObjectType(YYJSON_TYPE_ARR);
+        yyjson_mut_arr_add_val(mutableVal_, token.getRawMutableValue());
+    }
+
+    void JsonToken::appendChild(std::string_view key, const JsonToken& token) {
+        if (!mutable_) {
+            throw std::runtime_error("Token is immutable");
+        }
+
+        checkObjectType(YYJSON_TYPE_OBJ);
+        yyjson_mut_obj_add_val(mutableDoc_, mutableVal_, key.data(), token.getRawMutableValue());
+    }
+
     JsonToken JsonDocument::getRootToken() const {
         if (mutable_) {
-            return JsonToken{yyjson_mut_doc_get_root(mutableDoc_.get())};
+            return JsonToken{mutableDoc_.get(), yyjson_mut_doc_get_root(mutableDoc_.get())};
         }
 
         return JsonToken{yyjson_doc_get_root(doc_.get())};
@@ -170,5 +241,29 @@ namespace zepo {
 
     JsonDocument::JsonDocument()
         : mutableDoc_{yyjson_mut_doc_new(nullptr), yyjsonDeleter}, mutable_{true} {
+    }
+
+    yyjson_mut_doc* JsonDocument::getRawMutableValue() const {
+        return mutableDoc_.get();
+    }
+
+    yyjson_doc* JsonDocument::getRawImmutableValue() const {
+        return doc_.get();
+    }
+
+    void JsonDocument::setRoot(const JsonToken& rootToken) {
+        if (!mutable_) {
+            throw std::runtime_error("Document is immutable");
+        }
+
+        yyjson_mut_doc_set_root(mutableDoc_.get(), rootToken.getRawMutableValue());
+    }
+
+    std::string JsonDocument::stringify() {
+        if (!mutable_) {
+            return std::string{yyjson_write(doc_.get(), 0, nullptr)};
+        }
+
+        return std::string{yyjson_mut_write(mutableDoc_.get(), 0, nullptr)};
     }
 }

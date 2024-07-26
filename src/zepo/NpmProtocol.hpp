@@ -6,6 +6,7 @@
 #pragma once
 #ifndef ZEPO_NPMPROTOCOL_HPP
 #define ZEPO_NPMPROTOCOL_HPP
+#include <filesystem>
 #include <map>
 #include <optional>
 
@@ -43,6 +44,8 @@ namespace zepo {
                               std::optional<std::string_view> username,
                               std::optional<std::string_view> password,
                               std::iostream& output);
+
+    Task<> npmDecompressArchive(const std::filesystem::path& path, const std::filesystem::path& destination);
 }
 
 ZEPO_REFLECT_INFO_BEGIN_(zepo::NpmPackageInfo)

@@ -8,17 +8,14 @@
 #include <iostream>
 #include <ranges>
 #include <optional>
-#include <quickjs.h>
 
 #include "Configuration.hpp"
 #include "Global.hpp"
 #include "NpmProtocol.hpp"
 #include "async/TaskUtils.hpp"
 #include "diagnostics/PerfDiagnostics.hpp"
-#include "network/CurlAsyncIO.hpp"
 #include "semver/Range.hpp"
 #include "semver/Semver.hpp"
-#include "serialize/Json.hpp"
 #include "serialize/Serializer.hpp"
 
 namespace zepo {
@@ -108,18 +105,31 @@ namespace zepo {
         }
 
         for (const auto& select: packageSelect_) {
-            const auto outputPath = applicationPaths.downloadsPath / std::filesystem::path{select.tarball}.filename();
-            if (exists(outputPath)) continue;
+            // download
+            const auto downloadOutputPath = applicationPaths.downloadsPath / std::filesystem::path{select.tarball}.
+                                            filename();
+            const auto downloadOutputPathStr = downloadOutputPath.string();
 
-            const auto outputPathStr = outputPath.string();
+            do {
+                if (exists(downloadOutputPath)) break;
 
-            std::cout << "downloading: " << select.tarball << " to " << outputPathStr << std::endl;
-            std::fstream outputStream{outputPath, std::fstream::out | std::fstream::binary};
-            if (!outputStream.good()) {
-                throw std::runtime_error("failed to open " + outputPathStr + " for package downloading");
-            }
+                std::cout << "downloading: " << select.tarball << " to " << downloadOutputPathStr << std::endl;
+                std::fstream outputStream{downloadOutputPath, std::fstream::out | std::fstream::binary};
+                if (!outputStream.good()) {
+                    throw std::runtime_error("failed to open " + downloadOutputPathStr + " for package downloading");
+                }
 
-            co_await npmDownloadTarball(select.tarball, authUsername, authPassword, outputStream);
+                co_await npmDownloadTarball(select.tarball, authUsername, authPassword, outputStream);
+            } while (false);
+
+            // extract
+            const auto extractOutputPath = applicationPaths.packagesPath / select.name / select.selected;
+            do {
+                if (exists(extractOutputPath / "zepo-installation.lock")) break;
+                std::cout << "extracting: " << downloadOutputPathStr << " to " << extractOutputPath.string() << std::endl;
+
+                co_await npmDecompressArchive(downloadOutputPath, extractOutputPath);
+            } while (false);
         }
 
         ZEPO_PERF_END_(downloadPackages)
