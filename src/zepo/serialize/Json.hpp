@@ -66,13 +66,25 @@ namespace zepo {
 
         static JsonToken from(JsonDocument& jsonDoc, const std::string& value);
 
-        static JsonToken from(JsonDocument& jsonDoc, const double_t& value);
+        static JsonToken from(JsonDocument& jsonDoc, double_t value);
 
-        static JsonToken from(JsonDocument& jsonDoc, const float_t& value);
+        static JsonToken from(JsonDocument& jsonDoc, float_t value);
 
-        static JsonToken from(JsonDocument& jsonDoc, const int64_t& value);
+        static JsonToken from(JsonDocument& jsonDoc, int8_t value);
 
-        static JsonToken from(JsonDocument& jsonDoc, const uint64_t& value);
+        static JsonToken from(JsonDocument& jsonDoc, int16_t value);
+
+        static JsonToken from(JsonDocument& jsonDoc, int32_t value);
+
+        static JsonToken from(JsonDocument& jsonDoc, int64_t value);
+
+        static JsonToken from(JsonDocument& jsonDoc, uint8_t value);
+
+        static JsonToken from(JsonDocument& jsonDoc, uint16_t value);
+
+        static JsonToken from(JsonDocument& jsonDoc, uint32_t value);
+
+        static JsonToken from(JsonDocument& jsonDoc, uint64_t value);
 
         static JsonToken from(JsonDocument& jsonDoc, const JsonToken& value);
 

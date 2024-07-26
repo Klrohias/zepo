@@ -63,7 +63,7 @@ Task<> performInstall() {
 }
 
 Task<> performGetPackage() {
-
+    co_return;
 }
 
 void showHelp() {

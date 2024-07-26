@@ -127,19 +127,43 @@ namespace zepo {
         return JsonToken{jsonDoc.getRawMutableValue(), yyjson_mut_str(jsonDoc.getRawMutableValue(), value.c_str())};
     }
 
-    JsonToken JsonToken::from(JsonDocument& jsonDoc, const double_t& value) {
+    JsonToken JsonToken::from(JsonDocument& jsonDoc, double_t value) {
         return JsonToken{jsonDoc.getRawMutableValue(), yyjson_mut_real(jsonDoc.getRawMutableValue(), value)};
     }
 
-    JsonToken JsonToken::from(JsonDocument& jsonDoc, const float_t& value) {
+    JsonToken JsonToken::from(JsonDocument& jsonDoc, float_t value) {
         return JsonToken{jsonDoc.getRawMutableValue(), yyjson_mut_real(jsonDoc.getRawMutableValue(), (double_t) value)};
     }
 
-    JsonToken JsonToken::from(JsonDocument& jsonDoc, const int64_t& value) {
+    JsonToken JsonToken::from(JsonDocument& jsonDoc, int8_t value) {
+        return from(jsonDoc, static_cast<int64_t>(value));
+    }
+
+    JsonToken JsonToken::from(JsonDocument& jsonDoc, int16_t value) {
+        return from(jsonDoc, static_cast<int64_t>(value));
+    }
+
+    JsonToken JsonToken::from(JsonDocument& jsonDoc, int32_t value) {
+        return from(jsonDoc, static_cast<int64_t>(value));
+    }
+
+    JsonToken JsonToken::from(JsonDocument& jsonDoc, int64_t value) {
         return JsonToken{jsonDoc.getRawMutableValue(), yyjson_mut_int(jsonDoc.getRawMutableValue(), value)};
     }
 
-    JsonToken JsonToken::from(JsonDocument& jsonDoc, const uint64_t& value) {
+    JsonToken JsonToken::from(JsonDocument& jsonDoc, uint8_t value) {
+        return from(jsonDoc, static_cast<uint64_t>(value));
+    }
+
+    JsonToken JsonToken::from(JsonDocument& jsonDoc, uint16_t value) {
+        return from(jsonDoc, static_cast<uint64_t>(value));
+    }
+
+    JsonToken JsonToken::from(JsonDocument& jsonDoc, uint32_t value) {
+        return from(jsonDoc, static_cast<uint64_t>(value));
+    }
+
+    JsonToken JsonToken::from(JsonDocument& jsonDoc, uint64_t value) {
         return from(jsonDoc, static_cast<int64_t>(value));
     }
 
