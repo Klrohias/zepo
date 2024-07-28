@@ -17,8 +17,8 @@ namespace zepo {
 
     struct Package {
         std::string name;
-        std::map<std::string, std::string> dependencies;
-        std::map<std::string, std::string> devDependencies;
+        std::map<std::string, std::string, std::less<>> dependencies;
+        std::map<std::string, std::string, std::less<>> devDependencies;
         std::string version;
     };
 }

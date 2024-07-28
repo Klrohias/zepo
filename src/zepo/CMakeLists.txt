@@ -31,7 +31,7 @@ add_executable(zepo main.cpp
         diagnostics/PerfDiagnostics.cpp
         diagnostics/PerfDiagnostics.hpp
         NpmProtocol.cpp
-        PackageConfigInfo.hpp
+        Interfaces.hpp
 )
 
 target_link_libraries(zepo PRIVATE LibArchive::LibArchive)

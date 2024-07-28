@@ -166,9 +166,9 @@ namespace zepo {
         }
     };
 
-    template<typename T, typename TokenType>
-    struct ParseTraits<std::map<std::string, T>, TokenType> {
-        using Map = std::map<std::string, T>;
+    template<typename T, typename ...I, typename TokenType>
+    struct ParseTraits<std::map<std::string, T, I...>, TokenType> {
+        using Map = std::map<std::string, T, I...>;
 
         static Map parse(const TokenType& token) {
             Map mapResult{};
@@ -325,15 +325,15 @@ namespace zepo {
         }
     };
 
-    template<typename DocType, typename TokenType, typename WrappedType>
-    struct TokenifyTraits<std::map<std::string, WrappedType>, DocType, TokenType> {
-        using TargetType = std::map<std::string, WrappedType>;
+    template<typename DocType, typename TokenType, typename T, typename ...I>
+    struct TokenifyTraits<std::map<std::string, T, I...>, DocType, TokenType> {
+        using Map = std::map<std::string, T, I...>;
 
-        static TokenType tokenify(DocType& doc, const TargetType& value) {
+        static TokenType tokenify(DocType& doc, const Map& value) {
             TokenType token{doc, false};
 
             for (const auto& [key, item] : value) {
-                const auto resultToken = TokenifyTraits<WrappedType, DocType, TokenType>::tokenify(doc, item);
+                const auto resultToken = TokenifyTraits<T, DocType, TokenType>::tokenify(doc, item);
                 token.appendChild(key, resultToken);
             }
 

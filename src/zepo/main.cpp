@@ -15,13 +15,39 @@
 #include "serialize/Serializer.hpp"
 #include "serialize/Json.hpp"
 #include "PackageInstallation.hpp"
-#include "async/Generator.hpp"
 #include "Global.hpp"
 #include "diagnostics/PerfDiagnostics.hpp"
+#include "Interfaces.hpp"
+#include "quickjs-libc.h"
 
 using namespace zepo;
 
-Task<Configuration> readConfiguration(const std::string_view rootPath) {
+inline void createDirectoryIfNeed(const std::filesystem::path& path) {
+    if (!is_directory(path)) {
+        create_directory(path);
+    }
+}
+
+inline std::string_view findVersionRequirement(const std::string_view& packageName, const Package& manifest) {
+    std::string_view versionRequirement;
+    if (const auto iter = manifest.dependencies.find(packageName); iter != manifest.dependencies.end()) {
+        versionRequirement = iter->second;
+    } else if (const auto iter = manifest.devDependencies.find(packageName); iter != manifest.devDependencies.end()) {
+        versionRequirement = iter->second;
+    } else {
+        throw std::runtime_error("Try to find a package which is not included in \"package.json\"");
+    }
+
+    return versionRequirement;
+}
+
+static Task<> awaitJsPromise(JSContext* ctx, JSValue value) {
+    co_await TaskUtils::run<void>([&] {
+        js_std_await(ctx, value);
+    });
+}
+
+static Task<Configuration> readConfiguration(const std::string_view rootPath) {
     std::filesystem::path configPath = rootPath;
     configPath = configPath.parent_path();
     configPath /= "config.json";
@@ -33,7 +59,7 @@ Task<Configuration> readConfiguration(const std::string_view rootPath) {
     co_return parse<Configuration>(jsonDoc.getRootToken());
 }
 
-Task<Package> readPackageManifest(bool openMutable = false) {
+static Task<Package> readPackageManifest(bool openMutable = false) {
     const std::filesystem::path manifestPath{"package.json"};
     if (!exists(manifestPath)) {
         throw std::runtime_error("File \"package.json\" not found");
@@ -44,7 +70,7 @@ Task<Package> readPackageManifest(bool openMutable = false) {
     co_return parse<Package>(jsonDoc.getRootToken());
 }
 
-Task<> performInstall() {
+static Task<> performInstall() {
     const auto packageManifest = co_await readPackageManifest();
 
     ZEPO_PERF_BEGIN_(performInstall)
@@ -62,50 +88,83 @@ Task<> performInstall() {
     ZEPO_PERF_END_(performInstall)
 }
 
-Task<> performGetPackage() {
-    co_return;
+static void showGetPackageHelp() {
+    std::cout
+            << "Usage: zepo get-package [package-name] [options]\n"
+            << "  options: \n"
+            << "    -a, --available, make the package ready for using\n"
+            << std::endl;
 }
 
-void showHelp() {
-}
-
-Task<int> asyncMain(int argc, char** argv) {
-    // skip first argument
-    {
-        argc--;
-        argv++;
+static Task<> performGetPackage(const std::span<char*>& args) {
+    if (args.empty()) {
+        showGetPackageHelp();
+        co_return;
     }
 
-    try {
-        bool shouldShowHelp{false};
+    std::string_view packageName;
+    for (const auto argPtr: args) {
+        std::string_view arg{argPtr};
 
-        const std::string_view command{argv[0]};
-        if (argc == 0) {
-            shouldShowHelp = true;
-        } else if (command == "install") {
-            co_await performInstall();
-        } else if (command == "get-package") {
+        if (arg.starts_with('-')) {
+            // options
+        } else if (packageName.empty()) {
+            // package name
+            packageName = arg;
         } else {
-            shouldShowHelp = true;
+            // error: multi package names
+            showGetPackageHelp();
+            co_return;
         }
-
-        if (shouldShowHelp) {
-            showHelp();
-        }
-    } catch (const std::runtime_error& err) {
-        std::cerr << "Error: " << err.what() << std::endl;
     }
 
-    co_return 0;
+    if (packageName.empty()) {
+        // error: empty package name
+        showGetPackageHelp();
+        co_return;
+    }
+
+    // check package
+    if (!is_directory(applicationPaths.packagesPath / packageName)) {
+        throw std::runtime_error("Failed to find such a package, did you forget to `zepo install` it? ");
+    }
+
+    const auto manifest = co_await readPackageManifest();
+    const auto versionRequirement = findVersionRequirement(packageName, manifest);
+
+    // find version
+    semver::Range versionRange{versionRequirement};
+
+    JSContext* ctx = JS_NewContext(globalJsRuntime);
+
+    JS_FreeContext(ctx);
 }
 
-inline void createDirectoryIfNeed(const std::filesystem::path& path) {
-    if (!is_directory(path)) {
-        create_directory(path);
+static void showAppHelp() {
+    std::cout
+            << "Usage: zepo [command]\n"
+            << "  commands: \n"
+            << "    install, download and extract packages\n"
+            << "    get-package, get a single package's info\n"
+            << std::endl;
+}
+
+static Task<> performApp(const std::span<char*>& args) {
+    if (args.empty()) {
+        showAppHelp();
+    } else if (const std::string_view command{args[0]}; command == "install") {
+        co_await performInstall();
+    } else if (command == "get-package") {
+        co_await performGetPackage(args.subspan(1));
+    } else {
+        std::cout << "Unrecognized command \""
+                << command << "\"" << std::endl;
+
+        showAppHelp();
     }
 }
 
-void initGlobals(int argc, char** argv) {
+static void initGlobals(int argc, char** argv) {
     using namespace std::filesystem;
 
     if (argc == 0) {
@@ -134,10 +193,29 @@ void initGlobals(int argc, char** argv) {
     createDirectoryIfNeed(applicationPaths.buildsPath);
 }
 
+static Task<int> asyncMain(const std::span<char*>& args) {
+    try {
+        co_await performApp(args);
+    } catch (const std::runtime_error& err) {
+        std::cerr << "Error: " << err.what() << std::endl;
+        co_return 1;
+    }
+
+    co_return 0;
+}
+
 int main(int argc, char** argv) {
     initGlobals(argc, argv);
 
-    auto mainTask = asyncMain(argc, argv);
+    // skip first argument
+    {
+        argc--;
+        argv++;
+    }
+
+    const std::span args{argv, static_cast<size_t>(argc)};
+
+    auto mainTask = asyncMain(args);
     const auto result = mainTask.getValue();;
 
     PerfDiagnostics::getDefault().printTimes();
