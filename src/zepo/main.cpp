@@ -16,6 +16,7 @@
 #include "serialize/Json.hpp"
 #include "PackageInstallation.hpp"
 #include "Global.hpp"
+#include "Interfaces.hpp"
 #include "diagnostics/PerfDiagnostics.hpp"
 #include "quickjs-libc.h"
 #include "js_runtime/JSEnv.hpp"
@@ -147,16 +148,33 @@ static Task<> performGetPackage(const std::span<char*>& args) {
     }
 
     // load module
+    auto packageRoot = packagePath / "package";
     const auto ctx = js::initZepoJsContext(globalJsRuntime);
-    const auto module = co_await js::loadESModule(ctx, packagePath / "package/zepofile.js");
+    const auto module = co_await js::loadESModule(ctx, packageRoot / "zepofile.js");
     const auto buildFunction = js::getProperty(ctx, module, "build");
-    const auto packageInfo = co_await js::awaitPromise(ctx, js::call(ctx, buildFunction, module, {}));
+    const auto packageInfoObject = co_await js::awaitPromise(ctx, js::call(ctx, buildFunction, module, {}));
 
-    std::cout
-             << js::toString(ctx, JS_JSONStringify(ctx, packageInfo, JS_UNDEFINED,JS_UNDEFINED))
-             << std::endl;
+    auto packageInfo = [&] {
+        JsonDocument doc{js::toString(ctx, JS_JSONStringify(ctx, packageInfoObject, JS_UNDEFINED,JS_UNDEFINED))};
+        return parse<PackageInfo>(doc.getRootToken());
+    }();
 
-    JS_FreeValue(ctx, packageInfo);
+    for (auto& [key, pathStr]: packageInfo.paths) {
+        std::filesystem::path thisPath{pathStr};
+        if (thisPath.is_relative()) {
+            thisPath = packageRoot / thisPath;
+        }
+
+        pathStr = thisPath.string();
+    }
+
+    std::cout << [&] {
+        JsonDocument doc{};
+        doc.setRoot(tokenify<JsonToken>(doc, packageInfo));
+        return doc.stringify();
+    }() << std::endl;
+
+    JS_FreeValue(ctx, packageInfoObject);
     JS_FreeValue(ctx, buildFunction);
     JS_FreeValue(ctx, module);
     JS_FreeContext(ctx);
