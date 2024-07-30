@@ -8,9 +8,12 @@
 
 #include <coroutine>
 #include <memory>
-#include <thread>
 #include <condition_variable>
 #include <functional>
+#include <variant>
+#include <optional>
+
+#include "ThreadPool.hpp"
 
 namespace zepo {
     template<typename ReturnType = void>
@@ -33,28 +36,37 @@ namespace zepo {
             }
         };
 
+        inline std::vector<std::coroutine_handle<>> aliveHandles_{};
+
         template<typename ReturnType>
         struct UnsafeAwaiter {
+            using ReturnPtr = ReturnType*;
             using ContinueAction = std::function<void(UnsafeAwaiter*)>;
 
-            enum Status {
-                Pending = 0,
-                Completed,
-                Exception,
-            };
-
         private:
-            ReturnType* returnValue_{nullptr};
-            std::exception_ptr exception_{};
-
-            Status completed_{Pending};
+            std::variant<std::monostate, ReturnPtr, std::exception_ptr> value_{};
             ContinueAction continueAction_{};
 
             std::mutex mutex_{};
             std::condition_variable condVar_{};
+            std::optional<std::coroutine_handle<>> coroHandle_;
+
+            void notifyCompleted() {
+                if (continueAction_) {
+                    auto action = std::exchange(continueAction_, nullptr);
+                    ThreadWorker::getCurrentWorker().pool([this, action] {
+                        action(this);
+                    });
+                }
+
+                condVar_.notify_all();
+            }
 
         public:
             explicit UnsafeAwaiter() = default;
+
+            explicit UnsafeAwaiter(std::coroutine_handle<> handle) : coroHandle_{handle} {
+            }
 
             UnsafeAwaiter(const UnsafeAwaiter&) noexcept = delete;
 
@@ -62,78 +74,82 @@ namespace zepo {
 
             ~UnsafeAwaiter() {
                 if constexpr (!std::is_void_v<ReturnType>) {
-                    delete returnValue_;
+                    if (isSucceed()) {
+                        delete getResult();
+                    }
+                }
+
+                if (coroHandle_.has_value()) {
+                    coroHandle_->destroy();
                 }
             }
 
-            void setResult(ReturnType* value) {
-                if (completed_) {
+            void setResult(ReturnPtr value) {
+                if (isCompleted()) {
                     throw std::runtime_error("Cannot set result twice");
                 } {
                     std::unique_lock lock{mutex_};
-                    completed_ = Completed;
-                    returnValue_ = value;
+                    value_ = {value};
                 }
 
-                if (continueAction_) {
-                    continueAction_(this);
-                }
-
-                condVar_.notify_all();
+                notifyCompleted();
             }
 
             void setException(const std::exception_ptr& exceptionPtr) {
-                if (completed_) {
+                if (isCompleted()) {
                     throw std::runtime_error("Cannot set result twice");
                 } {
                     std::unique_lock lock{mutex_};
-                    completed_ = Exception;
-                    exception_ = exceptionPtr;
+                    value_ = exceptionPtr;
                 }
 
-                if (continueAction_) {
-                    continueAction_(this);
-                }
-
-                condVar_.notify_all();
+                notifyCompleted();
             }
 
-            [[nodiscard]] ReturnType* getResult() const {
-                return returnValue_;
+            [[nodiscard]] ReturnPtr getResult() const {
+                return std::get<ReturnPtr>(value_);
             }
 
             [[nodiscard]] std::exception_ptr getException() const {
-                return exception_;
+                return std::get<std::exception_ptr>(value_);
             }
 
-            [[nodiscard]] Status getStatus() const noexcept {
-                return completed_;
+            [[nodiscard]] bool isCompleted() const {
+                return !std::get_if<std::monostate>(&value_);
+            }
+
+            [[nodiscard]] bool isFailed() const {
+                if (!isCompleted()) return false;
+                return std::get_if<std::exception_ptr>(&value_);
+            }
+
+            [[nodiscard]] bool isSucceed() const {
+                if (!isCompleted()) return false;
+                return std::get_if<ReturnPtr>(&value_);
             }
 
             void continueWith(const ContinueAction& action) {
-                std::unique_lock lock{mutex_};
+                bool completed{false};
+                // check state
+                {
+                    std::unique_lock lock{mutex_};
+                    completed = isCompleted();
+                }
 
-                if (completed_) {
+                if (completed) {
                     action(this);
                     return;
                 }
 
-                continueAction_ = action;
-            }
-
-            void continueWith(ContinueAction&& action) {
-                std::unique_lock lock{mutex_};
-
-                if (completed_) {
-                    action(this);
-                    return;
-                }
                 continueAction_ = action;
             }
 
             void wait() {
                 std::unique_lock lock{mutex_};
-                condVar_.wait(lock, [this] { return completed_; });
+                condVar_.wait(lock, [this] { return isCompleted(); });
+
+                // wait for coro done
+                while (coroHandle_.has_value() && !coroHandle_->done()) { std::this_thread::yield(); }
             }
         };
 
@@ -148,12 +164,14 @@ namespace zepo {
             void return_value(ReturnType value) noexcept {
                 if (awaiter_) {
                     awaiter_->setResult(new ReturnType{std::move(value)});
+                    awaiter_ = nullptr;
                 }
             }
 
             void unhandled_exception() {
                 if (awaiter_) {
                     awaiter_->setException(std::current_exception());
+                    awaiter_ = nullptr;
                 }
             }
         };
@@ -166,15 +184,17 @@ namespace zepo {
 
             Task<> get_return_object();
 
-            void return_void() const noexcept {
+            void return_void() noexcept {
                 if (awaiter_) {
                     awaiter_->setResult(nullptr);
+                    awaiter_ = nullptr;
                 }
             }
 
-            void unhandled_exception() const {
+            void unhandled_exception() {
                 if (awaiter_) {
                     awaiter_->setException(std::current_exception());
+                    awaiter_ = nullptr;
                 }
             }
         };
@@ -192,8 +212,8 @@ namespace zepo {
         bool awaited_{false};
 
     public:
-        explicit Task(std::shared_ptr<AwaiterType> awaiter)
-            : awaiter_{std::move(awaiter)} {
+        explicit Task(const std::shared_ptr<AwaiterType>& awaiter)
+            : awaiter_{awaiter} {
         }
 
         Task(const Task&) = default;
@@ -201,7 +221,7 @@ namespace zepo {
         Task(Task&&) = default;
 
         [[nodiscard]] bool await_ready() const {
-            return awaiter_->getStatus();
+            return awaiter_->isCompleted();
         }
 
         void await_suspend(std::coroutine_handle<> handle) {
@@ -210,11 +230,13 @@ namespace zepo {
             }
 
             awaited_ = true;
-            awaiter_->continueWith([handle](AwaiterType*) { handle.resume(); });
+            awaiter_->continueWith([handle](AwaiterType*) {
+                handle.resume();
+            });
         }
 
         ReturnType await_resume() const {
-            if (awaiter_->getStatus() == AwaiterType::Exception) {
+            if (awaiter_->isFailed()) {
                 std::rethrow_exception(awaiter_->getException());
             }
 
@@ -227,6 +249,10 @@ namespace zepo {
 
         void wait() {
             awaiter_->wait();
+        }
+
+        void continueWith(const typename AwaiterType::ContinueAction& action) {
+            awaiter_->continueWith(action);
         }
 
         ReturnType getValue() {
@@ -243,7 +269,7 @@ namespace zepo {
                 throw std::runtime_error("Failed to construct Task twice");
             }
 
-            awaiter_ = std::make_shared<AwaiterType>();
+            awaiter_ = std::make_shared<AwaiterType>(HandleType::from_promise(*this));
             return Task<ReturnType>{awaiter_};
         }
 
@@ -252,8 +278,8 @@ namespace zepo {
                 throw std::runtime_error("Failed to construct Task twice");
             }
 
-            awaiter_ = std::make_shared<AwaiterType>();
-            return Task<>{awaiter_};
+            awaiter_ = std::make_shared<AwaiterType>(HandleType::from_promise(*this));
+            return Task{awaiter_};
         }
     }
 } // zepo

@@ -11,5 +11,8 @@
   }, {
     "name" : "libarchive",
     "version>=" : "3.7.2"
+  }, {
+    "name" : "uvw",
+    "version>=" : "3.2.0"
   } ]
 }

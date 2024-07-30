@@ -17,8 +17,9 @@
 #include "PackageInstallation.hpp"
 #include "Global.hpp"
 #include "diagnostics/PerfDiagnostics.hpp"
-#include "Interfaces.hpp"
 #include "quickjs-libc.h"
+#include "js_runtime/JSEnv.hpp"
+#include "js_runtime/JSUtils.hpp"
 
 using namespace zepo;
 
@@ -39,12 +40,6 @@ inline std::string_view findVersionRequirement(const std::string_view& packageNa
     }
 
     return versionRequirement;
-}
-
-static Task<> awaitJsPromise(JSContext* ctx, JSValue value) {
-    co_await TaskUtils::run<void>([&] {
-        js_std_await(ctx, value);
-    });
 }
 
 static Task<Configuration> readConfiguration(const std::string_view rootPath) {
@@ -125,7 +120,8 @@ static Task<> performGetPackage(const std::span<char*>& args) {
     }
 
     // check package
-    if (!is_directory(applicationPaths.packagesPath / packageName)) {
+    auto packagePath = applicationPaths.packagesPath / packageName;
+    if (!is_directory(packagePath)) {
         throw std::runtime_error("Failed to find such a package, did you forget to `zepo install` it? ");
     }
 
@@ -134,9 +130,35 @@ static Task<> performGetPackage(const std::span<char*>& args) {
 
     // find version
     semver::Range versionRange{versionRequirement};
+    std::filesystem::directory_iterator dirItorBegin{packagePath};
+    std::filesystem::directory_iterator dirItorEnd{};
+    if (auto iter = std::find_if(
+        dirItorBegin,
+        dirItorEnd,
+        [&](const auto& entry) {
+            if (!entry.is_directory()) return false;
+            const auto& versionPath = entry.path();
+            return versionRange.satisfies(semver::Version{versionPath.filename().string()});
+        }
+    ); iter != dirItorEnd) {
+        packagePath = iter->path();
+    } else {
+        throw std::runtime_error("Failed to a suitable version, did you forget to `zepo install` it? ");
+    }
 
-    JSContext* ctx = JS_NewContext(globalJsRuntime);
+    // load module
+    const auto ctx = js::initZepoJsContext(globalJsRuntime);
+    const auto module = co_await js::loadESModule(ctx, packagePath / "package/zepofile.js");
+    const auto buildFunction = js::getProperty(ctx, module, "build");
+    const auto packageInfo = co_await js::awaitPromise(ctx, js::call(ctx, buildFunction, module, {}));
 
+    std::cout
+             << js::toString(ctx, JS_JSONStringify(ctx, packageInfo, JS_UNDEFINED,JS_UNDEFINED))
+             << std::endl;
+
+    JS_FreeValue(ctx, packageInfo);
+    JS_FreeValue(ctx, buildFunction);
+    JS_FreeValue(ctx, module);
     JS_FreeContext(ctx);
 }
 
@@ -164,23 +186,21 @@ static Task<> performApp(const std::span<char*>& args) {
     }
 }
 
-static void initGlobals(int argc, char** argv) {
+static Task<> globalsStartup(const std::span<char*> args) {
     using namespace std::filesystem;
 
-    if (argc == 0) {
+    if (args.size() == 0) {
         std::exit(1);
     }
 
     // init js runtime
-    globalJsRuntime = JS_NewRuntime();
-    JS_SetMemoryLimit(globalJsRuntime, 80 * 1024);
-    JS_SetMaxStackSize(globalJsRuntime, 10 * 1024);
+    globalJsRuntime = js::initZepoJsRuntime();
 
     // load configuration
-    globalConfiguration = readConfiguration(argv[0]).getValue();
+    globalConfiguration = co_await readConfiguration(args[0]);
 
     // load application paths
-    path rootPath = argv[0];
+    path rootPath = args[0];
     rootPath = rootPath.parent_path();
 
     applicationPaths.packagesPath = rootPath / "packages";
@@ -193,31 +213,41 @@ static void initGlobals(int argc, char** argv) {
     createDirectoryIfNeed(applicationPaths.buildsPath);
 }
 
-static Task<int> asyncMain(const std::span<char*>& args) {
+static void globalsShutdown() {
+    js_std_free_handlers(globalJsRuntime);
+    JS_FreeRuntime(globalJsRuntime);
+}
+
+static Task<int> asyncMain(const std::span<char*> args) {
+    co_await globalsStartup(args);
+
     try {
-        co_await performApp(args);
+        co_await performApp(args.subspan(1));
     } catch (const std::runtime_error& err) {
         std::cerr << "Error: " << err.what() << std::endl;
         co_return 1;
     }
 
+    globalsShutdown();
     co_return 0;
 }
 
 int main(int argc, char** argv) {
-    initGlobals(argc, argv);
+    ThreadWorker worker;
+    int exitCode{0};
+    worker.pool([&] {
+        const std::span args{argv, static_cast<size_t>(argc)};
+        auto task = new Task{asyncMain(args)};
+        task->continueWith([task, &worker, &exitCode](Task<int>::AwaiterType*) {
+            exitCode = task->getValue();
+            worker.stopLocal();
+            delete task;
+        });
+    });
+    worker.startLocal();
+    worker.run();
 
-    // skip first argument
-    {
-        argc--;
-        argv++;
-    }
+    ThreadPool::getDefaultPool().stop();
 
-    const std::span args{argv, static_cast<size_t>(argc)};
-
-    auto mainTask = asyncMain(args);
-    const auto result = mainTask.getValue();;
-
-    PerfDiagnostics::getDefault().printTimes();
-    return result;
+    return exitCode;
 }

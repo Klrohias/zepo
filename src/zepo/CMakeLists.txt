@@ -2,7 +2,7 @@
 find_package(yyjson CONFIG REQUIRED)
 find_package(CURL REQUIRED)
 find_package(LibArchive REQUIRED)
-
+find_package(uvw CONFIG REQUIRED)
 add_executable(zepo main.cpp
         async/Task.hpp
         async/TaskCompletionSource.hpp
@@ -32,10 +32,17 @@ add_executable(zepo main.cpp
         diagnostics/PerfDiagnostics.hpp
         NpmProtocol.cpp
         Interfaces.hpp
+        js_runtime/JSUtils.hpp
+        js_runtime/JSUtils.cpp
+        js_runtime/JSEnv.hpp
+        js_runtime/JSEnv.cpp
+        async/ThreadWorker.cpp
+        async/ThreadWorker.hpp
 )
 
-target_link_libraries(zepo PRIVATE LibArchive::LibArchive)
 target_compile_features(zepo PRIVATE cxx_std_20)
+target_link_libraries(zepo PRIVATE uvw::uvw)
+target_link_libraries(zepo PRIVATE LibArchive::LibArchive)
 target_link_libraries(zepo PRIVATE CURL::libcurl)
 target_link_libraries(zepo PRIVATE yyjson::yyjson)
 target_link_libraries(zepo PRIVATE semver)

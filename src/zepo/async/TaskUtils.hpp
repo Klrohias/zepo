@@ -23,7 +23,7 @@ namespace zepo
         {
             auto taskCompletionSource{std::make_shared<TaskCompletionSource<ReturnType>>()};
 
-            ThreadPool::getDefaultPool().put([taskCompletionSource, func]
+            ThreadPool::getDefaultPool().pool([taskCompletionSource, func]
             {
                 if constexpr (std::is_void_v<ReturnType>)
                 {

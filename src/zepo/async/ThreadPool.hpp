@@ -11,47 +11,33 @@
 #include <vector>
 #include <queue>
 
+#include "ThreadWorker.hpp"
+
 namespace zepo
 {
     class ThreadPool
     {
     public:
-        using Action = std::function<void()>;
-
+        using Job = ThreadWorker::Job;
     private:
-        int workerCount_;
-        bool started_{false};
-        std::mutex operationLock_{};
-        std::condition_variable conditionVariable_{};
-        std::queue<Action> workItems_{};
-        std::vector<std::thread> workers_{};
-        static ThreadPool defaultPool_;
-
-        void worker();
+        int workerCount_{0};
+        int workerIdx_{0};
+        std::vector<std::unique_ptr<ThreadWorker>> workers_{};
 
     public:
-        explicit ThreadPool(int workerCount, bool startImmediately = false);
+        explicit ThreadPool(int workerCount);
+
+        static ThreadPool& getDefaultPool();
 
         ~ThreadPool();
 
         void start();
 
-        void stop();
+        void stop() const;
 
-        void put(const Action& func);
+        void pool(const Job& func);
 
-        void put(Action&& func);
-
-        template <typename FuncType, typename... Args>
-        auto async(FuncType& func, Args... args)
-        {
-            using WrapperType = std::packaged_task<decltype(func(args...))()>;
-            auto packagedTask = std::make_shared<WrapperType>(std::bind(func, std::forward<Args>(args)...));
-            put([packagedTask] { packagedTask->operator()(); });
-            return packagedTask->get_future();
-        }
-
-        static ThreadPool& getDefaultPool();
+        void pool(Job&& func);
     };
 } // zepo
 
