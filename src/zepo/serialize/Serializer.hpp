@@ -13,9 +13,24 @@
 #include <functional>
 #include <map>
 #include <vector>
+#include <optional>
 
 namespace zepo {
     // declares
+    struct SerializerExtensionDataAttribute {
+    };
+
+    struct SerializerNameAttribute {
+        std::string name;
+    };
+
+    template<typename FieldType, typename TokenType>
+    concept IsExtensionDataMap = requires(FieldType& it)
+    {
+        { it.try_emplace(std::string{}, TokenType{}) };
+        { it[std::string{}] } -> std::convertible_to<TokenType>;
+    };
+
     template<typename T, typename TokenType>
     T parse(const TokenType& token);
 
@@ -36,32 +51,67 @@ namespace zepo {
         }
     };
 
-    template<typename T, typename DocType, typename TokenType>
+    template<typename Type, typename DocType, typename TokenType>
     struct TokenifyTraits {
         struct SerializeHandler {
+            enum Flag {
+                kNone = 0,
+                kExtensionData = 0b1,
+            };
+
+            int flag{Flag::kNone};
+            SerializerNameAttribute* customNameAttribute{nullptr};
+
             TokenType& token;
-            const T& value;
+            const Type& value;
             DocType& doc;
 
-            explicit SerializeHandler(TokenType& token, const T& value, DocType& doc)
+            explicit SerializeHandler(TokenType& token, const Type& value, DocType& doc)
                 : token{token}, value{value}, doc{doc} {
             }
 
             template<auto Name, auto FieldReference>
             void field() {
-                using FieldType = decltype(T{}.*FieldReference);
+                using FieldType = decltype(Type{}.*FieldReference);
+
+                if constexpr (IsExtensionDataMap<FieldType, TokenType>) {
+                    if (flag & kExtensionData) {
+                        flag = kNone;
+                        // put extension data
+                        for (const auto& [key, value]: value.*FieldReference) {
+                            auto resultToken = TokenType::from(doc, value);
+                            token.appendChild(key, resultToken);
+                        }
+                        return;
+                    }
+                }
+
                 auto resultToken = TokenifyTraits<FieldType, DocType, TokenType>::tokenify(doc, value.*FieldReference);
-                token.appendChild(Name(), resultToken);
+                if (customNameAttribute) {
+                    token.appendChild(customNameAttribute->name, resultToken);
+                    customNameAttribute = nullptr;
+                } else {
+                    token.appendChild(Name(), resultToken);
+                }
+
+                flag = kNone;
             }
 
             template<auto Attribute>
             void attribute() {
+                if constexpr (std::is_same_v<decltype(Attribute()), SerializerExtensionDataAttribute*>) {
+                    flag |= kExtensionData;
+                }
+
+                if constexpr (std::is_same_v<decltype(Attribute()), SerializerNameAttribute*>) {
+                    customNameAttribute = Attribute();
+                }
             }
         };
 
-        static TokenType tokenify(DocType& doc, const T& value) {
+        static TokenType tokenify(DocType& doc, const Type& value) {
             TokenType token{doc, false};
-            ReflectTraits<T, SerializeHandler> reflectTraits{token, value, doc};
+            TypeDefTraits<Type, SerializeHandler> reflectTraits{token, value, doc};
             reflectTraits.execute();
 
             return token;
@@ -166,7 +216,7 @@ namespace zepo {
         }
     };
 
-    template<typename T, typename ...I, typename TokenType>
+    template<typename T, typename... I, typename TokenType>
     struct ParseTraits<std::map<std::string, T, I...>, TokenType> {
         using Map = std::map<std::string, T, I...>;
 
@@ -316,7 +366,7 @@ namespace zepo {
 
         static TokenType tokenify(DocType& doc, const TargetType& value) {
             TokenType token{doc, true};
-            for (const WrappedType& item : value) {
+            for (const WrappedType& item: value) {
                 const auto resultToken = TokenifyTraits<WrappedType, DocType, TokenType>::tokenify(doc, item);
                 token.appendChild(resultToken);
             }
@@ -325,14 +375,14 @@ namespace zepo {
         }
     };
 
-    template<typename DocType, typename TokenType, typename T, typename ...I>
+    template<typename DocType, typename TokenType, typename T, typename... I>
     struct TokenifyTraits<std::map<std::string, T, I...>, DocType, TokenType> {
         using Map = std::map<std::string, T, I...>;
 
         static TokenType tokenify(DocType& doc, const Map& value) {
             TokenType token{doc, false};
 
-            for (const auto& [key, item] : value) {
+            for (const auto& [key, item]: value) {
                 const auto resultToken = TokenifyTraits<T, DocType, TokenType>::tokenify(doc, item);
                 token.appendChild(key, resultToken);
             }
@@ -377,40 +427,174 @@ namespace zepo {
     }
 
     template<typename Type, typename TokenType>
-    struct DeserializeHandler {
+    struct DeserializeContext {
+        enum Flag {
+            kNone = 0,
+            kFoundExtensionDataInsertor = 0b1,
+            kIsNotExtension = 0b10,
+        };
+
+        struct DeserializeFieldProcessor {
+            DeserializeContext& context;
+            std::string_view key;
+            const TokenType& value;
+
+            explicit DeserializeFieldProcessor(DeserializeContext& context, std::string_view key,
+                                               const TokenType& value)
+                : context{context}, key{key}, value{value} {
+            }
+
+            template<auto Name, auto FieldReference>
+            void field() {
+                using FieldType = decltype(Type{}.*FieldReference);
+
+                if ((context.customNameAttribute && key == context.customNameAttribute->name)
+                    || (!context.customNameAttribute && Name() == key)) {
+                    context.target.*FieldReference = zepo::parse<FieldType>(value);
+                }
+
+                context.reset();
+            }
+
+            template<auto Attribute>
+            void attribute() const {
+                using AttributePtrType = decltype(Attribute());
+
+                if constexpr (std::is_same_v<AttributePtrType, SerializerExtensionDataAttribute*>) {
+                    context.scanExtensionDataRequired = true;
+                }
+
+                if constexpr (std::is_same_v<AttributePtrType, SerializerNameAttribute*>) {
+                    context.customNameAttribute = Attribute();
+                }
+            }
+        };
+
+        struct DeserializeExtensionDataProcessor {
+            DeserializeContext& context;
+            std::string_view key;
+            const TokenType& value;
+
+            explicit DeserializeExtensionDataProcessor(
+                DeserializeContext& context,
+                const std::string_view key,
+                const TokenType& value
+            ) : context{context}, key{key}, value{value} {
+            }
+
+            template<auto Name, auto FieldReference>
+            void field() {
+                using FieldType = decltype(Type{}.*FieldReference);
+
+                if constexpr (IsExtensionDataMap<FieldType, TokenType>) {
+                    if (context.flags & kFoundExtensionDataInsertor) {
+                        context.extensionDataInsertor = [](Type* target, const std::string& key, const TokenType& value) {
+                            (target->*FieldReference).try_emplace(key, value);
+                        };
+
+                        context.flags &= ~kFoundExtensionDataInsertor;
+                    }
+                }
+
+
+                if ((context.customNameAttribute && key == context.customNameAttribute->name)
+                    || (!context.customNameAttribute && Name() == key)) {
+                    context.flags |= kIsNotExtension;
+                }
+            }
+
+            void postprocess() {
+                if (!(context.flags & kIsNotExtension)) {
+                    // is extension
+                    context.extensionData.try_emplace(std::string{key}, value);
+                }
+                context.reset();
+            }
+
+            template<auto Attribute>
+            void attribute() const {
+                using AttributePtrType = decltype(Attribute());
+
+                if constexpr (std::is_same_v<AttributePtrType, SerializerExtensionDataAttribute*>) {
+                    context.flags |= kFoundExtensionDataInsertor;
+                }
+
+                if constexpr (std::is_same_v<AttributePtrType, SerializerNameAttribute*>) {
+                    context.customNameAttribute = Attribute();
+                }
+            }
+        };
+
+        bool scanExtensionDataRequired{false};
+        int flags{kNone};
+        SerializerNameAttribute* customNameAttribute{nullptr};
+        std::function<void(Type*, const std::string&, const TokenType&)> extensionDataInsertor;
+        std::map<std::string, TokenType> extensionData;
+
         Type& target;
         const TokenType& token;
-        std::string_view targetName;
 
-        DeserializeHandler(Type& target, const TokenType& token, std::string_view targetName)
-            : target{target}, token{token}, targetName{targetName} {
+        explicit DeserializeContext(Type& target, const TokenType& token)
+            : target{target}, token(token) {
         }
 
-        template<auto Name, auto FieldReference>
-        void field() {
-            if (targetName == Name()) {
-                target.*FieldReference = zepo::parse<decltype(Type{}.*FieldReference)>(token);
+        void deserializeExtensionData() {
+            zepo::forEach<TokenType>(
+                token,
+                [&](std::string_view key, const TokenType& value) {
+                    TypeDefTraits<Type, DeserializeExtensionDataProcessor> processor{
+                        *this,
+                        key,
+                        value
+                    };
+
+                    processor.execute();
+                    processor.postprocess();
+                    return false;
+                }
+            );
+
+            for (auto [k, v]: extensionData) {
+                extensionDataInsertor(&target, k, v);
             }
         }
 
-        template<auto Attribute>
-        void attribute() {
+        void deserialize() {
+            zepo::forEach<TokenType>(token, [this](std::string_view key, const TokenType& value) {
+                TypeDefTraits<Type, DeserializeFieldProcessor> processor{*this, key, value};
+                processor.execute();
+                return false;
+            });
+
+            if (scanExtensionDataRequired) {
+                deserializeExtensionData();
+            }
+        }
+
+        void reset() {
+            customNameAttribute = nullptr;
+            flags = kNone;
         }
     };
 }
 
 #ifndef ZEPO_NO_MACROS
 
-#define ZEPO_REFLECT_PARSABLE_(TYPE_) template<typename TokenType> \
+#define ZS_MakeParsable(TYPE_) template<typename TokenType> \
 struct zepo::ParseTraits<TYPE_, TokenType> { \
     static TYPE_ parse(const TokenType& token) { \
         TYPE_ result; \
-        zepo::forEach<TokenType>(token, [&result](std::string_view key, const TokenType& value) { \
-            zepo::ReflectTraits<TYPE_, DeserializeHandler<TYPE_, TokenType>> reflectHandle{result, value, key}; \
-            reflectHandle.execute(); \
-            return false; \
-        }); \
+        zepo::DeserializeContext<TYPE_, TokenType> context{result, token}; \
+        context.deserialize(); \
         return result; \
+    } \
+}
+
+#define ZS_DefTokenizer(TYPE_, FUNC_) template<typename DocType, typename TokenType> \
+struct zepo::TokenifyTraits<TYPE_, DocType, TokenType> { \
+    static TokenType tokenify(DocType& forwardedDoc, const TYPE_& forwardedValue) { \
+        using TargetType = TYPE_; \
+        return FUNC_(forwardedDoc, forwardedValue); \
     } \
 }
 

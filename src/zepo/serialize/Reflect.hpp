@@ -9,21 +9,17 @@
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <typeindex>
 
 namespace zepo {
     inline void checkTypeMatch(const std::type_index& fieldType, std::string_view fieldName,
                                const std::type_index& requiredType) {
+        using namespace std::string_literals;
         if (requiredType != fieldType) {
-            std::string exceptionMessage;
-            exceptionMessage.append("Field type mismatch: \"");
-            exceptionMessage.append(fieldType.name());
-            exceptionMessage.append(" ");
-            exceptionMessage.append(fieldName);
-            exceptionMessage.append("\" and \"");
-            exceptionMessage.append(requiredType.name());
-            exceptionMessage.append("\"");
-            throw std::runtime_error(exceptionMessage);
+            throw std::runtime_error(
+                "Field type mismatch: \""s + fieldType.name() + " " + std::string(fieldName) + "\" and \"" +
+                requiredType.name() + "\"");
         }
     }
 
@@ -65,7 +61,7 @@ namespace zepo {
     };
 
     template<typename Type>
-    struct TypeMetadata {
+    struct TypeInfo {
         using TargetType = Type;
 
     private:
@@ -100,6 +96,17 @@ namespace zepo {
             return *fieldIter;
         }
 
+        const FieldInfo* tryFindField(std::string_view name) {
+            auto fieldIter = std::find_if(fields_.begin(), fields_.end(),
+                                          [&name](const FieldInfo& it) { return it.name == name; });
+
+            if (fieldIter == fields_.end()) {
+                return nullptr;
+            }
+
+            return std::addressof(*fieldIter);
+        }
+
         template<typename FieldType>
         FieldType getField(Type& instance, std::string_view name) {
             const auto& fieldInfo = findField(name);
@@ -118,8 +125,8 @@ namespace zepo {
     };
 
     template<typename Type>
-    struct MetadataHandler {
-        TypeMetadata<Type> metadata{};
+    struct MetadataGenerator {
+        TypeInfo<Type> metadata{};
         std::vector<AttributeInfo> pendingAttributes{};
 
         template<auto Name, auto FieldReference>
@@ -139,7 +146,7 @@ namespace zepo {
     };
 
     template<typename Type, typename Handler>
-    struct ReflectTraits : Handler {
+    struct TypeDefTraits : Handler {
         using Handler::Handler;
 
         void execute() {
@@ -148,33 +155,33 @@ namespace zepo {
     };
 
     template<typename Type>
-    auto metadataOf = TypeMetadata<Type>{};
+    auto metadataOf = TypeInfo<Type>{};
 }
 
 
 #ifndef ZEPO_NO_MACROS
 
-#define ZEPO_REFLECT_METADATA_(TYPE_) template<> \
-zepo::TypeMetadata<TYPE_> zepo::metadataOf<TYPE_> = []() { \
-    static zepo::ReflectTraits<TYPE_, zepo::MetadataHandler<TYPE_>> metadataHandler{}; \
+#define ZR_MakeMetadata(TYPE_) template<> \
+zepo::TypeInfo<TYPE_> zepo::metadataOf<TYPE_> = []() { \
+    static zepo::TypeDefTraits<TYPE_, zepo::MetadataGenerator<TYPE_>> metadataHandler{}; \
     metadataHandler.execute(); \
     return metadataHandler.metadata; \
 }();
 
-#define ZEPO_REFLECT_INFO_BEGIN_(TYPE_) template<typename Handler> \
-    struct zepo::ReflectTraits<TYPE_, Handler> : Handler { \
+#define ZR_BeginDef(TYPE_) template<typename Handler> \
+    struct zepo::TypeDefTraits<TYPE_, Handler> : Handler { \
         using CurrentType = TYPE_; \
         using Handler::Handler; \
         void execute() {
 
-#define ZEPO_REFLECT_ATTRIBUTE_(ATTRIBUTE_) this->template attribute<[] { \
+#define ZR_Attribute(ATTRIBUTE_) this->template attribute<[] { \
     static auto currentAttribute{ATTRIBUTE_}; \
     return &currentAttribute; \
 }>()
 
-#define ZEPO_REFLECT_FIELD_(FIELD_) this->template field<[] { return (#FIELD_); }, &CurrentType::##FIELD_>()
+#define ZR_Field(FIELD_) this->template field<[] { return (#FIELD_); }, &CurrentType::##FIELD_>()
 
-#define ZEPO_REFLECT_INFO_END_()     } \
+#define ZR_EndDef()     } \
 };
 
 #endif //ZEPO_NO_MACROS

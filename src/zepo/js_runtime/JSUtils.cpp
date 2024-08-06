@@ -16,6 +16,22 @@ namespace zepo::js {
         });
     }
 
+    Task<JSValue> tryAwaitPromise(JSContext* ctx, JSValue value) {
+        // check the value if is promise-like
+        const auto thenAtom = JS_NewAtom(ctx, "then");
+        const auto thenFunc = JS_GetProperty(ctx, value, thenAtom);
+        throwCXXException(ctx, thenFunc);
+        const bool isPromiseLike = thenFunc.tag != JS_TAG_UNDEFINED;
+        JS_FreeValue(ctx, thenFunc);
+        JS_FreeAtom(ctx, thenAtom);
+
+        if (isPromiseLike) {
+            co_return co_await awaitPromise(ctx, value);
+        }
+
+        co_return value;
+    }
+
     JSValue eval(JSContext* ctx, std::string_view code, int flag) {
         auto result = JS_Eval(ctx, code.data(), code.size(), "<input>", flag);
         throwCXXException(ctx, result);
@@ -52,9 +68,11 @@ namespace zepo::js {
 
     Task<JSValue> loadESModule(JSContext* ctx, const std::filesystem::path& filePath) {
         const auto parent = filePath.parent_path();
+        const auto promise = JS_LoadModule(ctx, parent.string().c_str(), filePath.string().c_str());
+        js_std_loop(ctx);
         co_return co_await awaitPromise(
             ctx,
-            JS_LoadModule(ctx, parent.string().c_str(), filePath.string().c_str())
+            promise
         );
     }
 
@@ -67,5 +85,21 @@ namespace zepo::js {
 
         throwCXXException(ctx, object);
         return object;
+    }
+
+    JSValue parseJson(JSContext* ctx, std::string_view stringView, std::string_view filename) {
+        auto result = JS_ParseJSON(ctx, stringView.data(), stringView.size(), filename.data());
+        throwCXXException(ctx, result);
+
+        return result;
+    }
+
+    std::string stringifyJson(JSContext* ctx, JSValue value) {
+        const auto resultString = JS_JSONStringify(ctx, value, JS_UNDEFINED, JS_UNDEFINED);
+        throwCXXException(ctx, resultString);
+        std::string result{toString(ctx, resultString)};
+        JS_FreeValue(ctx, resultString);
+
+        return result;
     }
 } // namespace zepo

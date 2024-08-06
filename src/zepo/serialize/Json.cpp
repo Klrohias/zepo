@@ -167,9 +167,16 @@ namespace zepo {
         return from(jsonDoc, static_cast<int64_t>(value));
     }
 
-    JsonToken JsonToken::from(JsonDocument& jsonDoc, const JsonToken& value) {
-        // TODO
-        throw std::runtime_error("method not impl");
+    JsonToken JsonToken::from(const JsonDocument& jsonDoc, const JsonToken& value) {
+        yyjson_mut_val* mutVal{nullptr};
+
+        if (!value.mutable_) {
+            mutVal = yyjson_val_mut_copy(jsonDoc.getRawMutableValue(), value.getRawImmutableValue());
+        } else {
+            mutVal = yyjson_mut_val_mut_copy(jsonDoc.getRawMutableValue(), value.getRawMutableValue());
+        }
+
+        return JsonToken{jsonDoc.getRawMutableValue(), mutVal};
     }
 
     JsonToken JsonToken::fromNull(JsonDocument& jsonDoc) {
@@ -275,6 +282,10 @@ namespace zepo {
         return doc_.get();
     }
 
+    bool JsonDocument::isMutable() const {
+        return mutable_;
+    }
+
     void JsonDocument::setRoot(const JsonToken& rootToken) {
         if (!mutable_) {
             throw std::runtime_error("Document is immutable");
@@ -284,10 +295,15 @@ namespace zepo {
     }
 
     std::string JsonDocument::stringify() {
+        char* str;
         if (!mutable_) {
-            return std::string{yyjson_write(doc_.get(), 0, nullptr)};
+            str = yyjson_write(doc_.get(), 0, nullptr);
+        } else {
+            str = yyjson_mut_write(mutableDoc_.get(), 0, nullptr);
         }
+        std::string result{str};
+        std::free(str);
 
-        return std::string{yyjson_mut_write(mutableDoc_.get(), 0, nullptr)};
+        return result;
     }
 }

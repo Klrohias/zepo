@@ -2,7 +2,8 @@
 find_package(yyjson CONFIG REQUIRED)
 find_package(CURL REQUIRED)
 find_package(LibArchive REQUIRED)
-find_package(uvw CONFIG REQUIRED)
+find_package(fmt CONFIG REQUIRED)
+
 add_executable(zepo main.cpp
         async/Task.hpp
         async/TaskCompletionSource.hpp
@@ -19,8 +20,6 @@ add_executable(zepo main.cpp
         NpmProtocol.hpp
         network/CurlAsyncIO.hpp
         network/CurlAsyncIO.cpp
-        PackageInstallation.hpp
-        PackageInstallation.cpp
         semver/Semver.hpp
         semver/Semver.cpp
         semver/Range.cpp
@@ -38,12 +37,30 @@ add_executable(zepo main.cpp
         js_runtime/JSEnv.cpp
         async/ThreadWorker.cpp
         async/ThreadWorker.hpp
+        commands/GenerateCommand.hpp
+        commands/GenerateCommand.cpp
+        commands/GetPackageCommand.hpp
+        commands/GetPackageCommand.cpp
+        commands/InstallCommand.hpp
+        commands/InstallCommand.cpp
+        Utils.cpp
+        Utils.hpp
+        Interfaces.cpp
+        pkg_manager/PkgUtils.hpp
+        pkg_manager/PkgUtils.cpp
 )
 
 target_compile_features(zepo PRIVATE cxx_std_20)
-target_link_libraries(zepo PRIVATE uvw::uvw)
+target_link_libraries(zepo PRIVATE fmt::fmt)
 target_link_libraries(zepo PRIVATE LibArchive::LibArchive)
 target_link_libraries(zepo PRIVATE CURL::libcurl)
 target_link_libraries(zepo PRIVATE yyjson::yyjson)
 target_link_libraries(zepo PRIVATE semver)
 target_link_libraries(zepo PRIVATE quickjs-universal)
+
+add_custom_command(
+        TARGET zepo POST_BUILD
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/public/*
+        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/public
+        ${CMAKE_CURRENT_BINARY_DIR})

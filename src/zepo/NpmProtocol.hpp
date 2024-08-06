@@ -48,27 +48,27 @@ namespace zepo {
     Task<> npmDecompressArchive(const std::filesystem::path& path, const std::filesystem::path& destination);
 }
 
-ZEPO_REFLECT_INFO_BEGIN_(zepo::NpmPackageInfo)
-    ZEPO_REFLECT_FIELD_(name);
-    ZEPO_REFLECT_FIELD_(versions);
-ZEPO_REFLECT_INFO_END_()
+ZR_BeginDef(zepo::NpmPackageInfo)
+    ZR_Field(name);
+    ZR_Field(versions);
+ZR_EndDef()
 
-ZEPO_REFLECT_PARSABLE_(zepo::NpmPackageInfo);
+ZS_MakeParsable(zepo::NpmPackageInfo);
 
-ZEPO_REFLECT_INFO_BEGIN_(zepo::NpmPackageVersion)
-    ZEPO_REFLECT_FIELD_(version);
-    ZEPO_REFLECT_FIELD_(dist);
-    ZEPO_REFLECT_FIELD_(dependencies);
-ZEPO_REFLECT_INFO_END_()
+ZR_BeginDef(zepo::NpmPackageVersion)
+    ZR_Field(version);
+    ZR_Field(dist);
+    ZR_Field(dependencies);
+ZR_EndDef()
 
-ZEPO_REFLECT_PARSABLE_(zepo::NpmPackageVersion);
+ZS_MakeParsable(zepo::NpmPackageVersion);
 
-ZEPO_REFLECT_INFO_BEGIN_(zepo::NpmPackageDist)
-    ZEPO_REFLECT_FIELD_(shasum);
-    ZEPO_REFLECT_FIELD_(tarball);
-    ZEPO_REFLECT_FIELD_(integrity);
-ZEPO_REFLECT_INFO_END_()
+ZR_BeginDef(zepo::NpmPackageDist)
+    ZR_Field(shasum);
+    ZR_Field(tarball);
+    ZR_Field(integrity);
+ZR_EndDef()
 
-ZEPO_REFLECT_PARSABLE_(zepo::NpmPackageDist);
+ZS_MakeParsable(zepo::NpmPackageDist);
 
 #endif //ZEPO_NPMPROTOCOL_HPP

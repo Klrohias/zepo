@@ -16,6 +16,7 @@ namespace zepo {
         std::filesystem::path downloadsPath{};
         std::filesystem::path packagesPath{};
         std::filesystem::path buildsPath{};
+        std::filesystem::path generatorsPath{};
     };
 
     extern Configuration globalConfiguration;

@@ -4,7 +4,7 @@
 
 #include "PerfDiagnostics.hpp"
 
-#include <iostream>
+#include <fmt/core.h>
 
 namespace zepo {
     PerfDiagnostics::PerfDiagnostics() = default;
@@ -19,12 +19,12 @@ namespace zepo {
     }
 
     void PerfDiagnostics::printTimes() const {
-        std::cout << "== begin print times ==" << std::endl;
+        fmt::println("== begin print times ==");
         for (const auto& [kind, time]: timeKinds_) {
-            std::cout << kind << ": " << time << "us\n";
+            fmt::println(" {}: {} us", kind, time);
         }
 
-        std::cout << "== finish print times ==" << std::endl;
+        fmt::println("== finish print times ==");
     }
 
     PerfDiagnostics& PerfDiagnostics::getDefault() {

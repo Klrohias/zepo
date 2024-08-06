@@ -19,12 +19,12 @@ namespace zepo {
     };
 }
 
-ZEPO_REFLECT_INFO_BEGIN_(zepo::Configuration)
-    ZEPO_REFLECT_FIELD_(registry);
-    ZEPO_REFLECT_FIELD_(authUsername);
-    ZEPO_REFLECT_FIELD_(authPassword);
-ZEPO_REFLECT_INFO_END_()
+ZR_BeginDef(zepo::Configuration)
+    ZR_Field(registry);
+    ZR_Field(authUsername);
+    ZR_Field(authPassword);
+ZR_EndDef()
 
-ZEPO_REFLECT_PARSABLE_(zepo::Configuration);
+ZS_MakeParsable(zepo::Configuration);
 
 #endif //ZEPO_CONFIGURATION_HPP

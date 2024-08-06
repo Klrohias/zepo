@@ -7,33 +7,45 @@
 #define ZEPO_MANIFEST_HPP
 #include <map>
 #include <string>
+#include <optional>
 
 #include "serialize/Json.hpp"
 #include "serialize/Reflect.hpp"
 #include "serialize/Serializer.hpp"
 
 namespace zepo {
-    struct Package;
+    struct PackageManifest;
+    struct ZepoOptions;
 
-    struct Package {
+    struct ZepoOptions {
+        std::optional<std::map<std::string, std::string, std::less<>>> packageNames;
+        std::optional<std::string> entry;
+    };
+
+    struct PackageManifest {
         std::string name;
         std::map<std::string, std::string, std::less<>> dependencies;
         std::map<std::string, std::string, std::less<>> devDependencies;
         std::string version;
+        std::optional<ZepoOptions> zepo;
     };
 }
 
-ZEPO_REFLECT_INFO_BEGIN_(zepo::Package)
-    ZEPO_REFLECT_FIELD_(name);
-    ZEPO_REFLECT_FIELD_(dependencies);
-    ZEPO_REFLECT_FIELD_(devDependencies);
+ZR_BeginDef(zepo::PackageManifest)
+    ZR_Field(name);
+    ZR_Field(dependencies);
+    ZR_Field(devDependencies);
+    ZR_Field(version);
+    ZR_Field(zepo);
+ZR_EndDef()
 
-    ZEPO_REFLECT_ATTRIBUTE_(std::string{"hello, world!"});
-    ZEPO_REFLECT_FIELD_(version);
-ZEPO_REFLECT_INFO_END_()
+ZS_MakeParsable(zepo::PackageManifest);
 
-ZEPO_REFLECT_PARSABLE_(zepo::Package);
+ZR_BeginDef(zepo::ZepoOptions)
+    ZR_Field(packageNames);
+    ZR_Field(entry);
+ZR_EndDef()
 
-ZEPO_REFLECT_METADATA_(zepo::Package);
+ZS_MakeParsable(zepo::ZepoOptions);
 
 #endif //ZEPO_MANIFEST_HPP

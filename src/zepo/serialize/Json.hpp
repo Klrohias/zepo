@@ -27,8 +27,6 @@ namespace zepo {
 
         void checkObjectType(yyjson_type type) const;
 
-        [[nodiscard]] yyjson_type getObjectType() const;
-
     public:
         explicit JsonToken();
 
@@ -86,7 +84,7 @@ namespace zepo {
 
         static JsonToken from(JsonDocument& jsonDoc, uint64_t value);
 
-        static JsonToken from(JsonDocument& jsonDoc, const JsonToken& value);
+        static JsonToken from(const JsonDocument& jsonDoc, const JsonToken& value);
 
         static JsonToken fromNull(JsonDocument& jsonDoc);
 
@@ -97,6 +95,8 @@ namespace zepo {
         void appendChild(const JsonToken& token);
 
         void appendChild(std::string_view key, const JsonToken& token);
+
+        [[nodiscard]] yyjson_type getObjectType() const;
     };
 
     struct JsonDocument {
@@ -115,6 +115,8 @@ namespace zepo {
         [[nodiscard]] yyjson_mut_doc* getRawMutableValue() const;
 
         [[nodiscard]] yyjson_doc* getRawImmutableValue() const;
+
+        [[nodiscard]] bool isMutable() const;
 
         void setRoot(const JsonToken& rootToken);
 
