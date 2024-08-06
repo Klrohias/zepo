@@ -21,7 +21,7 @@ namespace zepo {
     };
 
     struct SerializerNameAttribute {
-        std::string name;
+        std::string_view name;
     };
 
     template<typename FieldType, typename TokenType>
@@ -378,6 +378,22 @@ namespace zepo {
     template<typename DocType, typename TokenType, typename T, typename... I>
     struct TokenifyTraits<std::map<std::string, T, I...>, DocType, TokenType> {
         using Map = std::map<std::string, T, I...>;
+
+        static TokenType tokenify(DocType& doc, const Map& value) {
+            TokenType token{doc, false};
+
+            for (const auto& [key, item]: value) {
+                const auto resultToken = TokenifyTraits<T, DocType, TokenType>::tokenify(doc, item);
+                token.appendChild(key, resultToken);
+            }
+
+            return token;
+        }
+    };
+
+    template<typename DocType, typename TokenType, typename T, typename... I>
+    struct TokenifyTraits<std::map<std::string_view, T, I...>, DocType, TokenType> {
+        using Map = std::map<std::string_view, T, I...>;
 
         static TokenType tokenify(DocType& doc, const Map& value) {
             TokenType token{doc, false};

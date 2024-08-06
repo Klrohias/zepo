@@ -88,8 +88,8 @@ namespace zepo::pkg_manager {
         JSContext* ctx
     ) {
         std::string_view entryFilename = "zepofile.js";
-        if (manifest.zepo.has_value() && manifest.zepo->entry.has_value()) {
-            entryFilename = manifest.zepo.value().entry.value();
+        if (manifest.zepoOptions.has_value() && manifest.zepoOptions->entry.has_value()) {
+            entryFilename = manifest.zepoOptions.value().entry.value();
         }
 
         const auto entryPath = packageRoot / entryFilename;

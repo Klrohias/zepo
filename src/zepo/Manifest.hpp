@@ -27,7 +27,7 @@ namespace zepo {
         std::map<std::string, std::string, std::less<>> dependencies;
         std::map<std::string, std::string, std::less<>> devDependencies;
         std::string version;
-        std::optional<ZepoOptions> zepo;
+        std::optional<ZepoOptions> zepoOptions;
     };
 }
 
@@ -36,7 +36,9 @@ ZR_BeginDef(zepo::PackageManifest)
     ZR_Field(dependencies);
     ZR_Field(devDependencies);
     ZR_Field(version);
-    ZR_Field(zepo);
+
+    ZR_Attribute(SerializerNameAttribute{"zepo"});
+    ZR_Field(zepoOptions);
 ZR_EndDef()
 
 ZS_MakeParsable(zepo::PackageManifest);

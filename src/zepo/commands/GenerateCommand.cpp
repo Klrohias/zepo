@@ -10,6 +10,7 @@
 #include <ranges>
 #include <fmt/core.h>
 #include <string_view>
+#include <optional>
 
 #include "quickjs-libc.h"
 #include "zepo/Global.hpp"
@@ -21,6 +22,14 @@
 #include "zepo/pkg_manager/PkgUtils.hpp"
 
 namespace zepo::commands {
+    struct GenerateCmdFlags {
+        std::optional<std::string_view> target;
+        std::optional<std::string_view> system;
+        std::filesystem::path output;
+        std::optional<std::string_view> arch;
+        bool dev{false};
+    };
+
     static void showHelp() {
         fmt::println(R"(
 Usage: zepo generate [build-system] [options]
@@ -35,12 +44,19 @@ Usage: zepo generate [build-system] [options]
 )");
     }
 
-    Task<> generateCMakePackage(std::filesystem::path outputPath, std::string exportName,
-                                std::string_view packageName, const PackageManifest& manifest) {
+    Task<> generateCMakePackage(
+        JSContext* jsContext,
+        const GenerateCmdFlags& flags,
+        std::map<std::string_view, std::string> exportNames,
+        std::string_view packageName,
+        const PackageManifest& manifest
+    ) {
         using namespace std::filesystem;
-        fmt::println(R"(Generating CMake script for package "{}" with export name "{}")", packageName, exportName);
 
-        outputPath /= fmt::format("{}-config.cmake", exportName);
+        const auto& exportName = exportNames[packageName];
+        const auto outputPath = flags.output / fmt::format("{}-config.cmake", exportName);
+
+        fmt::println(R"(Generating CMake script for package "{}" with export name "{}")", packageName, exportName);
 
         JsonDocument doc{};
         auto packageInfo = co_await pkg_manager::buildZepoPackage(packageName, manifest, doc);
@@ -49,6 +65,7 @@ Usage: zepo generate [build-system] [options]
         if (exists(outputPath)) {
             remove(outputPath);
         }
+
         std::fstream fileStream{outputPath, std::ios::out};
         if (!fileStream.good()) {
             throw std::runtime_error(fmt::format("Failed to open file \"{}\" for writing", outputPath.string()));
@@ -57,42 +74,74 @@ Usage: zepo generate [build-system] [options]
         doc.setRoot(tokenify<JsonToken>(doc, packageInfo));
 
         // execute generator script
-        const auto ctx = js::initZepoJsContext(globalJsRuntime);
-        const auto moduleObject = co_await js::loadESModule(ctx, applicationPaths.generatorsPath / "cmake.js");
+        const auto moduleObject = co_await js::loadESModule(jsContext, applicationPaths.generatorsPath / "cmake.js");
 
-        const auto generateFunction = js::getProperty(ctx, moduleObject, "generate");
+        const auto generateFunction = js::getProperty(jsContext, moduleObject, "generate");
         // args
-        const auto packageInfoObjext = js::parseJson(ctx, doc.stringify());
-        const auto exportNameString = JS_NewString(ctx, exportName.c_str());
+        const auto packageInfoObjext = js::parseJson(jsContext, doc.stringify());
+        const auto exportNameString = JS_NewString(jsContext, exportName.c_str());
 
         std::array args{packageInfoObjext, exportNameString};
-        const auto generateResult = co_await js::awaitPromise(ctx, js::call(ctx, generateFunction, moduleObject, args));
+        const auto generateResult = co_await js::awaitPromise(
+            jsContext, js::call(jsContext, generateFunction, moduleObject, args));
 
-        fileStream << js::toString(ctx, generateResult);
+        fileStream << js::toString(jsContext, generateResult);
 
-        JS_FreeValue(ctx, exportNameString);
-        JS_FreeValue(ctx, packageInfoObjext);
-        JS_FreeValue(ctx, generateResult);
-        JS_FreeValue(ctx, generateFunction);
-        JS_FreeValue(ctx, moduleObject);
-        JS_FreeContext(ctx);
+        JS_FreeValue(jsContext, exportNameString);
+        JS_FreeValue(jsContext, packageInfoObjext);
+        JS_FreeValue(jsContext, generateResult);
+        JS_FreeValue(jsContext, generateFunction);
+        JS_FreeValue(jsContext, moduleObject);
     }
 
-    std::string getDefaultName(std::string_view packageName) {
-        auto indexOfPathSeparator = packageName.rfind('/');
-        if (indexOfPathSeparator != -1) {
+    static std::string findDefaultExportName(const std::string_view packageName) {
+        if (const auto indexOfPathSeparator = packageName.rfind('/');
+            indexOfPathSeparator != std::string_view::npos) {
             return std::string(packageName.substr(indexOfPathSeparator + 1));
         }
 
         return std::string(packageName);
     }
 
-    Task<> generateCMakeDirectory(const std::span<char*>& args) {
+    static std::string findExportName(const std::string_view packageName, const PackageManifest& manifest) {
+        if (!manifest.zepoOptions.has_value() || !manifest.zepoOptions->packageNames.has_value()) {
+            return findDefaultExportName(packageName);
+        }
+
+        auto& packageNameMap = manifest.zepoOptions->packageNames.value();
+        const auto resultPair = packageNameMap.find(packageName);
+        if (resultPair == packageNameMap.end()) {
+            return findDefaultExportName(packageName);
+        }
+
+        return resultPair->second;
+    }
+
+    static std::map<std::string_view, std::string> findExportNames(
+        const PackageManifest& manifest,
+        const GenerateCmdFlags& flags
+    ) {
+        std::map<std::string_view, std::string> exportNames;
+
+        for (const auto& depName: manifest.dependencies | std::views::keys) {
+            exportNames.try_emplace(depName, findExportName(depName, manifest));
+        }
+
+        if (flags.dev) {
+            for (const auto& depName: manifest.devDependencies | std::views::keys) {
+                exportNames.try_emplace(depName, findExportName(depName, manifest));
+            }
+        }
+
+        return exportNames;
+    }
+
+    static GenerateCmdFlags scanFlags(const std::span<char*>& args) {
         using namespace std::filesystem;
 
         // args
-        auto outputDir = current_path() / "zepo_packages";
-        auto includeDevDeps = false;
+        auto flags = GenerateCmdFlags{};
+        flags.output = current_path() / "zepo_packages";
 
         // scan args
         for (auto iter = args.begin(); iter != args.end(); ++iter) {
@@ -101,61 +150,56 @@ Usage: zepo generate [build-system] [options]
 
             if (currentArg == "-o" or currentArg == "--output") {
                 ++iter;
-                outputDir = {*iter};
+                flags.output = *iter;
             } else if (currentArg == "-D" or currentArg == "--dev") {
-                includeDevDeps = true;
+                flags.dev = true;
+            } else if (currentArg == "-A" or currentArg == "--arch") {
+                ++iter;
+                flags.arch = *iter;
+            } else if (currentArg == "-S" or currentArg == "--system") {
+                ++iter;
+                flags.system = *iter;
+            } else if (currentArg == "-T" or currentArg == "--target") {
+                ++iter;
+                flags.target = *iter;
             }
+        }
+
+        return flags;
+    }
+
+    Task<> generateCMakeDirectory(const std::span<char*>& args) {
+        using namespace std::filesystem;
+
+        // prepare
+        const auto flags = scanFlags(args);
+        const auto manifest = co_await readPackageManifest();
+        const auto exportNames = findExportNames(manifest, flags);
+
+        // init js context
+        JSContext* jsContext = js::initZepoJsContext(globalJsRuntime);
+        JSValue exportNamesArray;
+
+        // generate and send exportNames into JSContext
+        {
+            JsonDocument doc;
+            doc.setRoot(tokenify<JsonToken>(doc, exportNames));
+            exportNamesArray = js::parseJson(jsContext, doc.stringify());
         }
 
         // create dir
-        if (!is_directory(outputDir)) {
-            create_directories(outputDir);
+        if (!is_directory(flags.output)) {
+            create_directories(flags.output);
         }
 
         // generate
-        auto manifest = co_await readPackageManifest();
-
         std::vector<Task<>> tasks;
 
-        // TODO: shit code, tidy it up
-        for (const auto& depName: manifest.dependencies | std::views::keys) {
-            const std::string exportName = [&] {
-                if (!manifest.zepo.has_value() || !manifest.zepo->packageNames.has_value()) {
-                    return getDefaultName(depName);
-                }
-
-                const auto& map = manifest.zepo->packageNames.value();
-                if (const auto iter = map.find(depName);
-                    iter != map.end()) {
-                    return iter->second;
-                }
-
-                return getDefaultName(depName);
-            }();
-
-            tasks.emplace_back(generateCMakePackage(outputDir, exportName, depName, manifest));
-        }
-        if (includeDevDeps) {
-            for (const auto& depName: manifest.devDependencies | std::views::keys) {
-                const std::string exportName = [&] {
-                    if (!manifest.zepo.has_value() || !manifest.zepo->packageNames.has_value()) {
-                        return getDefaultName(depName);
-                    }
-
-                    const auto& map = manifest.zepo->packageNames.value();
-                    if (const auto iter = map.find(depName);
-                        iter != map.end()) {
-                        return iter->second;
-                    }
-
-                    return getDefaultName(depName);
-                }();
-
-                tasks.emplace_back(generateCMakePackage(outputDir, exportName, depName, manifest));
-            }
-        }
-
         co_await TaskUtils::whenAll(tasks);
+
+        // free after alloc
+        JS_FreeValue(jsContext, exportNamesArray);
+        JS_FreeContext(jsContext);
     }
 
     Task<> generateNpmDirectory(const std::span<char*>& args) {
