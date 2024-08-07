@@ -11,6 +11,8 @@
 #include <span>
 #include <string>
 
+#include "zepo/serialize/Json.hpp"
+#include "zepo/serialize/Serializer.hpp"
 #include "zepo/async/Task.hpp"
 
 namespace zepo::js {
@@ -33,6 +35,25 @@ namespace zepo::js {
     JSValue parseJson(JSContext* ctx, std::string_view stringView, std::string_view filename = "<internal>");
 
     std::string stringifyJson(JSContext* ctx, JSValue value);
+
+    template<typename Type>
+    JSValue pushCXXObject(JSContext* jsContext, const Type& value) {
+        JsonDocument jsonDoc{};
+        jsonDoc.setRoot(tokenify<JsonToken>(jsonDoc, value));
+        return parseJson(jsContext, jsonDoc.stringify());
+    }
+
+    template<typename Type>
+        Type toCXXObject(JSContext* jsContext, const JSValue value) {
+        const JsonDocument jsonDoc{stringifyJson(jsContext, value)};
+        return parse<Type>(jsonDoc.getRootToken());
+    }
+
+    template<typename Type>
+    Type toCXXObject(JSContext* jsContext, const JSValue value, JsonDocument& jsonDoc) {
+        jsonDoc = JsonDocument{stringifyJson(jsContext, value)};
+        return parse<Type>(jsonDoc.getRootToken());
+    }
 } // namespace zepo
 
 #endif //ZEPO_ASYNC_HPP

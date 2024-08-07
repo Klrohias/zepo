@@ -7,6 +7,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <ranges>
 #include <fmt/core.h>
 #include <string_view>
@@ -14,12 +15,13 @@
 
 #include "quickjs-libc.h"
 #include "zepo/Global.hpp"
-#include "zepo/Interfaces.hpp"
 #include "zepo/Utils.hpp"
 #include "zepo/async/TaskUtils.hpp"
+#include "zepo/semver/Range.hpp"
 #include "zepo/js_runtime/JSEnv.hpp"
 #include "zepo/js_runtime/JSUtils.hpp"
-#include "zepo/pkg_manager/PkgUtils.hpp"
+#include "zepo/pkg_manager/Build.hpp"
+#include "zepo/pkg_manager/BuildOptions.hpp"
 
 namespace zepo::commands {
     struct GenerateCmdFlags {
@@ -42,56 +44,6 @@ Usage: zepo generate [build-system] [options]
     -S, --system [system], specify target system
     -T, --target [target], spefify target instead usage of -A, -S
 )");
-    }
-
-    Task<> generateCMakePackage(
-        JSContext* jsContext,
-        const GenerateCmdFlags& flags,
-        std::map<std::string_view, std::string> exportNames,
-        std::string_view packageName,
-        const PackageManifest& manifest
-    ) {
-        using namespace std::filesystem;
-
-        const auto& exportName = exportNames[packageName];
-        const auto outputPath = flags.output / fmt::format("{}-config.cmake", exportName);
-
-        fmt::println(R"(Generating CMake script for package "{}" with export name "{}")", packageName, exportName);
-
-        JsonDocument doc{};
-        auto packageInfo = co_await pkg_manager::buildZepoPackage(packageName, manifest, doc);
-
-        // write cmake script
-        if (exists(outputPath)) {
-            remove(outputPath);
-        }
-
-        std::fstream fileStream{outputPath, std::ios::out};
-        if (!fileStream.good()) {
-            throw std::runtime_error(fmt::format("Failed to open file \"{}\" for writing", outputPath.string()));
-        }
-
-        doc.setRoot(tokenify<JsonToken>(doc, packageInfo));
-
-        // execute generator script
-        const auto moduleObject = co_await js::loadESModule(jsContext, applicationPaths.generatorsPath / "cmake.js");
-
-        const auto generateFunction = js::getProperty(jsContext, moduleObject, "generate");
-        // args
-        const auto packageInfoObjext = js::parseJson(jsContext, doc.stringify());
-        const auto exportNameString = JS_NewString(jsContext, exportName.c_str());
-
-        std::array args{packageInfoObjext, exportNameString};
-        const auto generateResult = co_await js::awaitPromise(
-            jsContext, js::call(jsContext, generateFunction, moduleObject, args));
-
-        fileStream << js::toString(jsContext, generateResult);
-
-        JS_FreeValue(jsContext, exportNameString);
-        JS_FreeValue(jsContext, packageInfoObjext);
-        JS_FreeValue(jsContext, generateResult);
-        JS_FreeValue(jsContext, generateFunction);
-        JS_FreeValue(jsContext, moduleObject);
     }
 
     static std::string findDefaultExportName(const std::string_view packageName) {
@@ -168,50 +120,184 @@ Usage: zepo generate [build-system] [options]
         return flags;
     }
 
-    Task<> generateCMakeDirectory(const std::span<char*>& args) {
-        using namespace std::filesystem;
+    class CMakeGenerateContext {
+        GenerateCmdFlags flags_;
+        PackageManifest manifest_;
+        // string_view keys always alive
+        std::map<std::string_view, std::string> exportNames_{};
+        pkg_manager::BuildOptions buildOptions_{};
 
-        // prepare
-        const auto flags = scanFlags(args);
-        const auto manifest = co_await readPackageManifest();
-        const auto exportNames = findExportNames(manifest, flags);
+        // js side
+        JSContext* jsContext_{nullptr};
+        JSValue exportNamesMap_{};
 
-        // init js context
-        JSContext* jsContext = js::initZepoJsContext(globalJsRuntime);
-        JSValue exportNamesArray;
+    public:
+        explicit CMakeGenerateContext() = default;
 
-        // generate and send exportNames into JSContext
-        {
-            JsonDocument doc;
-            doc.setRoot(tokenify<JsonToken>(doc, exportNames));
-            exportNamesArray = js::parseJson(jsContext, doc.stringify());
+        CMakeGenerateContext(const CMakeGenerateContext&) = delete;
+
+        CMakeGenerateContext(CMakeGenerateContext&&) = delete;
+
+        semver::Range findRequirementVersionRange(std::string_view packageName) {
+            if (const auto it = manifest_.dependencies.find(packageName); it != manifest_.dependencies.end()) {
+                return semver::Range{it->second};
+            }
+
+            if (const auto it = manifest_.devDependencies.find(packageName); it != manifest_.devDependencies.end()) {
+                return semver::Range{it->second};
+            }
+
+            throw std::runtime_error(
+                fmt::format(R"(Failed to found a version range for package "{}")", packageName));
         }
 
-        // create dir
-        if (!is_directory(flags.output)) {
-            create_directories(flags.output);
+        Task<> generateCMakePackage(
+            std::string_view packageName
+        ) {
+            using namespace std::filesystem;
+
+            // prepare
+            const auto& exportName = exportNames_[packageName];
+            const auto outputPath = flags_.output / fmt::format("{}-config.cmake", exportName);
+
+            // build
+            auto buildReport = co_await buildPackage(
+                jsContext_,
+                packageName,
+                findRequirementVersionRange(packageName),
+                buildOptions_
+            );
+
+            if (!buildReport.has_value()) {
+                // skip script writing
+                co_return;
+            }
+
+            // write cmake script
+            fmt::println(R"(Generating CMake script for package "{}" with export name "{}")", packageName, exportName);
+
+            if (exists(outputPath)) {
+                remove(outputPath);
+            }
+
+            std::fstream fileStream{outputPath, std::ios::out};
+            if (!fileStream.good()) {
+                throw std::runtime_error(fmt::format("Failed to open file \"{}\" for writing", outputPath.string()));
+            }
+
+            // execute generator script
+            const auto moduleObject = co_await
+                    js::loadESModule(jsContext_, applicationPaths.generatorsPath / "cmake.js");
+
+            const auto generateFunction = js::getProperty(jsContext_, moduleObject, "generate");
+
+            // call arguments
+            const auto buildReportObject = js::pushCXXObject(jsContext_, buildReport.value());
+            const auto packageNameString = JS_NewString(jsContext_, packageName.data());
+            std::array callArguments{buildReportObject, exportNamesMap_, packageNameString};
+
+            const auto generateResult = co_await js::awaitPromise(
+                jsContext_, js::call(jsContext_, generateFunction, moduleObject, callArguments));
+
+            fileStream << js::toString(jsContext_, generateResult);
+
+            JS_FreeValue(jsContext_, packageNameString);
+            JS_FreeValue(jsContext_, buildReportObject);
+            JS_FreeValue(jsContext_, generateResult);
+            JS_FreeValue(jsContext_, generateFunction);
+            JS_FreeValue(jsContext_, moduleObject);
         }
 
-        // generate
-        std::vector<Task<>> tasks;
+        Task<> findBuildOptions() {
+            if (flags_.target.has_value()) {
+                const auto& targetName = flags_.target.value();
+                const auto targetDefFile = applicationPaths.targetFilesPath / fmt::format("{}.js", targetName);
 
-        co_await TaskUtils::whenAll(tasks);
+                if (!exists(targetDefFile)) {
+                    throw std::runtime_error(fmt::format("Failed to find target {}", targetName));
+                }
 
-        // free after alloc
-        JS_FreeValue(jsContext, exportNamesArray);
-        JS_FreeContext(jsContext);
-    }
+                const auto targetObject = co_await js::loadESModule(jsContext_, targetDefFile);
+
+                const auto systemNameString = js::getProperty(jsContext_, targetObject, "system");
+                if (systemNameString.tag == JS_TAG_STRING) {
+                    buildOptions_.targetSystem = js::toString(jsContext_, systemNameString);
+                }
+
+                const auto archNameString = js::getProperty(jsContext_, targetObject, "arch");
+                if (archNameString.tag == JS_TAG_STRING) {
+                    buildOptions_.targetSystem = js::toString(jsContext_, archNameString);
+                }
+
+                JS_FreeValue(jsContext_, archNameString);
+                JS_FreeValue(jsContext_, systemNameString);
+                JS_FreeValue(jsContext_, targetObject);
+
+                co_return;
+            }
+
+            if (flags_.arch.has_value()) {
+                buildOptions_.targetArch = flags_.arch.value();
+            }
+
+            if (flags_.system.has_value()) {
+                buildOptions_.targetSystem = flags_.system.value();
+            }
+        }
+
+        Task<> generateCMakeDirectory(const std::span<char*>& args) {
+            // prepare
+            flags_ = scanFlags(args);
+            manifest_ = co_await readPackageManifest();
+            exportNames_ = findExportNames(manifest_, flags_);
+            jsContext_ = js::initZepoJsContext(globalJsRuntime);
+
+            co_await findBuildOptions();
+
+            // generate and send exportNames into JSContext
+            {
+                JsonDocument doc;
+                doc.setRoot(tokenify<JsonToken>(doc, exportNames_));
+                exportNamesMap_ = js::parseJson(jsContext_, doc.stringify());
+            }
+
+            // create dir
+            if (!is_directory(flags_.output)) {
+                create_directories(flags_.output);
+            }
+
+            // generate
+            std::vector<Task<>> tasks;
+
+            for (const auto& packageName: manifest_.dependencies | std::views::keys) {
+                tasks.emplace_back(generateCMakePackage(packageName));
+            }
+
+            if (flags_.dev) {
+                for (const auto& packageName: manifest_.devDependencies | std::views::keys) {
+                    tasks.emplace_back(generateCMakePackage(packageName));
+                }
+            }
+
+            co_await TaskUtils::whenAll(tasks);
+
+            // free after alloc
+            JS_FreeValue(jsContext_, exportNamesMap_);
+            JS_FreeContext(jsContext_);
+        }
+    };
 
     Task<> generateNpmDirectory(const std::span<char*>& args) {
         // TODO make junction links into `node_modules` directory
         co_return;
     }
 
-    Task<> performGenerate(std::span<char*> args) {
+    Task<> performGenerate(const std::span<char*> args) {
         if (args.empty()) {
             showHelp();
         } else if (const std::string_view buildSystem{args[0]}; buildSystem == "cmake") {
-            co_await generateCMakeDirectory(args);
+            CMakeGenerateContext context;
+            co_await context.generateCMakeDirectory(args);
         } else if (buildSystem == "npm") {
             co_await generateNpmDirectory(args);
         } else {

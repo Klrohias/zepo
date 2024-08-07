@@ -30,7 +30,6 @@ add_executable(zepo main.cpp
         diagnostics/PerfDiagnostics.cpp
         diagnostics/PerfDiagnostics.hpp
         NpmProtocol.cpp
-        Interfaces.hpp
         js_runtime/JSUtils.hpp
         js_runtime/JSUtils.cpp
         js_runtime/JSEnv.hpp
@@ -39,15 +38,15 @@ add_executable(zepo main.cpp
         async/ThreadWorker.hpp
         commands/GenerateCommand.hpp
         commands/GenerateCommand.cpp
-        commands/GetPackageCommand.hpp
-        commands/GetPackageCommand.cpp
         commands/InstallCommand.hpp
         commands/InstallCommand.cpp
         Utils.cpp
         Utils.hpp
-        Interfaces.cpp
-        pkg_manager/PkgUtils.hpp
-        pkg_manager/PkgUtils.cpp
+        pkg_manager/BuildOptions.hpp
+        pkg_manager/Build.hpp
+        pkg_manager/Build.cpp
+        pkg_manager/BuildReport.hpp
+        pkg_manager/BuildReport.cpp
 )
 
 target_compile_features(zepo PRIVATE cxx_std_20)

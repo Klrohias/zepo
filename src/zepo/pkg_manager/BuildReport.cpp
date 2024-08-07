@@ -1,16 +1,14 @@
 //
-// Created by qingy on 2024/7/31.
+// Created by qingy on 2024/8/7.
 //
 
-#include "Interfaces.hpp"
-
-#include <stdexcept>
 #include <fmt/core.h>
 
-namespace zepo {
-    void PackagePaths::parse(const JsonToken& token) {
-        const auto objectType = token.getObjectType();
-        if (objectType == YYJSON_TYPE_ARR) {
+#include "BuildReport.hpp"
+
+namespace zepo::pkg_manager {
+    void OutputPathCollection::parse(const JsonToken& token) {
+        if (const auto objectType = token.getObjectType(); objectType == YYJSON_TYPE_ARR) {
             paths = zepo::parse<std::vector<std::string>, JsonToken>(token);
         } else if (objectType == YYJSON_TYPE_STR) {
             paths.emplace_back(zepo::parse<std::string, JsonToken>(token));

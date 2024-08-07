@@ -19,7 +19,6 @@
 #include "js_runtime/JSEnv.hpp"
 #include "js_runtime/JSUtils.hpp"
 #include "commands/GenerateCommand.hpp"
-#include "commands/GetPackageCommand.hpp"
 #include "commands/InstallCommand.hpp"
 
 using namespace zepo;
@@ -48,8 +47,8 @@ static void showAppHelp() {
 Usage: zepo [command]
   commands:
     install, download and extract packages
-    get-package, get a single package's info
     generate, generate scripts of specified build system for dependencies in package.json
+    pkgconfig, let zepo act as pkgconfig (WIP)
 )");
 }
 
@@ -58,8 +57,6 @@ static Task<> performApp(const std::span<char*>& args) {
         showAppHelp();
     } else if (const std::string_view command{args[0]}; command == "install") {
         co_await commands::performInstall(args.subspan(1));
-    } else if (command == "get-package") {
-        co_await commands::performGetPackage(args.subspan(1));
     } else if (command == "generate") {
         co_await commands::performGenerate(args.subspan(1));
     } else {
@@ -89,6 +86,7 @@ static Task<> globalsStartup(const std::span<char*> args) {
     applicationPaths.downloadsPath = rootPath / "downloads";
     applicationPaths.buildsPath = rootPath / "builds";
     applicationPaths.generatorsPath = rootPath / "generators";
+    applicationPaths.targetFilesPath = rootPath / "targets";
 
     // mkdirs
     createDirectoryIfNeed(applicationPaths.packagesPath);
